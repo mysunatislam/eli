@@ -1,0 +1,34 @@
+# Eli backend — Python 3.10+ (tested on 3.12, Windows 10)
+fastapi>=0.115
+uvicorn[standard]>=0.30
+anthropic>=1.0
+httpx>=0.27
+python-dotenv>=1.0
+# vision
+mss>=9.0
+pillow>=10.0
+winocr>=0.0.13 ; sys_platform == "win32"
+# automation
+pyautogui>=0.9.54
+pygetwindow>=0.0.9
+psutil>=5.9
+pyperclip>=1.8
+pywin32>=306 ; sys_platform == "win32"
+# speech
+numpy>=1.26
+sounddevice>=0.4.6
+faster-whisper>=1.0
+pyttsx3>=2.90
+# memory
+cryptography>=42
+keyring>=25
+sqlite-vec>=0.1.6
+
+# LLM providers
+google-genai>=1.30
+# engineering design checks (mesh analysis)
+trimesh>=4.4
+
+# guided workflows: neural female voice (Edge TTS, online) + mp3 decoding for playback
+edge-tts>=6.1
+miniaudio>=1.59

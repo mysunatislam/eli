@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline';">
+  <title>Eli guide</title>
+  <link rel="stylesheet" href="guide.css">
+</head>
+<body>
+  <canvas id="fx"></canvas>
+
+  <div id="card" class="card" hidden>
+    <div class="card-head">
+      <span class="mini-heart" aria-hidden="true"></span>
+      <span id="card-step" class="card-step">STEP 1 OF 6</span>
+      <span id="card-app" class="card-app"></span>
+      <span id="voice" class="voice" hidden><i></i><i></i><i></i></span>
+    </div>
+    <div id="card-title" class="card-title"></div>
+    <div id="card-text" class="card-text"></div>
+    <div class="card-foot">
+      <div id="dots" class="dots"></div>
+      <span id="key" class="key" hidden></span>
+      <span class="hint">say “next” · “repeat” · “another way” · “stop the guide”</span>
+    </div>
+  </div>
+
+  <div id="banner" class="banner" hidden></div>
+
+  <script src="guide.js"></script>
+</body>
+</html>

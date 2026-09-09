@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; connect-src ws://127.0.0.1:* http://127.0.0.1:* ws://localhost:* http://localhost:*; img-src 'self' data: http://127.0.0.1:*;">
+  <title>Eli</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div id="root">
+
+    <section id="panel" class="panel interactive" hidden>
+      <header class="panel-head">
+        <div class="brand"><span class="mini-heart" aria-hidden="true"></span><span>Eli</span></div>
+        <div class="pills">
+          <span id="pill-state" class="pill">idle</span>
+          <span id="pill-observe" class="pill pill-rec" hidden>● observing</span>
+          <span id="pill-private" class="pill pill-private" hidden>private</span>
+          <span id="pill-trust" class="pill pill-trust" hidden>trust</span>
+          <span id="pill-llm" class="pill pill-off" title="">offline</span>
+        </div>
+        <button id="btn-close" class="icon-btn" title="Hide (Ctrl+Shift+E)" aria-label="Hide panel">
+          <svg viewBox="0 0 16 16" width="14" height="14"><path d="M3 3l10 10M13 3L3 13" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+        </button>
+      </header>
+
+      <div id="context" class="context">Seeing: —</div>
+
+      <div id="transcript" class="transcript" aria-live="polite"></div>
+
+      <div id="confirm" class="confirm" hidden>
+        <div class="confirm-title">Eli wants to</div>
+        <div id="confirm-text" class="confirm-text"></div>
+        <div class="confirm-actions">
+          <button id="confirm-no" class="btn">Cancel</button>
+          <button id="confirm-yes" class="btn btn-primary">Approve</button>
+        </div>
+      </div>
+
+      <form id="composer" class="composer" autocomplete="off">
+        <button type="button" id="btn-mic" class="icon-btn mic" title="Push to talk (Ctrl+Shift+Space)" aria-label="Push to talk">
+          <svg viewBox="0 0 16 16" width="16" height="16"><rect x="5.5" y="1.5" width="5" height="8" rx="2.5" fill="currentColor"/><path d="M3.5 7.5a4.5 4.5 0 0 0 9 0M8 12v2.5" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linecap="round"/></svg>
+        </button>
+        <input id="input" type="text" placeholder="Ask Eli, or tell it what to do…" spellcheck="false">
+        <button type="button" id="btn-stop" class="icon-btn" title="Stop talking" aria-label="Stop talking" hidden>
+          <svg viewBox="0 0 16 16" width="14" height="14"><rect x="3" y="3" width="10" height="10" rx="2" fill="currentColor"/></svg>
+        </button>
+        <button type="submit" class="icon-btn send" title="Send" aria-label="Send">
+          <svg viewBox="0 0 16 16" width="16" height="16"><path d="M2 8l12-6-4 6 4 6z" fill="currentColor"/></svg>
+        </button>
+      </form>
+
+      <footer class="panel-foot">
+        <label class="toggle" title="Let Eli capture the screen every few seconds"><input type="checkbox" id="tg-observe"><span>See screen</span></label>
+        <label class="toggle" title="Always listen for “Hey Eli”"><input type="checkbox" id="tg-wake"><span>“Hey Eli”</span></label>
+        <label class="toggle" title="Speak replies aloud"><input type="checkbox" id="tg-voice"><span>Voice</span></label>
+        <label class="toggle" title="Private mode: no capture, no memory, no cloud calls"><input type="checkbox" id="tg-private"><span>Private</span></label>
+        <label class="toggle" title="The heart trails your cursor (Ctrl+Shift+F)"><input type="checkbox" id="tg-follow"><span>Follow</span></label>
+        <label class="toggle" title="Trust mode: run commands, tests and file writes without asking (destructive commands still ask)"><input type="checkbox" id="tg-trust"><span>Trust</span></label>
+        <span class="spacer"></span>
+        <button id="btn-jobs" class="link-btn" title="Scheduled work">Tasks <span id="jobs-badge" class="badge" hidden></span></button>
+        <button id="btn-perms" class="link-btn" title="Permissions and privacy">Privacy</button>
+        <button id="btn-mobile" class="link-btn" title="Pair your phone">Phone</button>
+        <button id="btn-quit" class="link-btn" title="Quit Eli">Quit</button>
+      </footer>
+      <div id="mobile-info" class="drawer" hidden></div>
+      <div id="jobs" class="drawer" hidden>
+        <div id="jobs-list"></div>
+        <div class="drawer-row"><span class="lbl">Try: “remind me in 20 minutes to stretch”, “every hour check whether the build passed”, “keep watching the download and tell me when it finishes”.</span></div>
+      </div>
+      <div id="perms" class="drawer" hidden>
+        <div class="drawer-row"><label class="toggle"><input type="checkbox" id="tg-automation"><span>Allow Eli to control mouse and keyboard</span></label></div>
+        <div class="drawer-row"><label class="toggle"><input type="checkbox" id="tg-autofix"><span>Fix repeated errors proactively (look first, then propose)</span></label></div>
+        <div class="drawer-row"><label class="toggle"><input type="checkbox" id="tg-autostart"><span>Start Eli when I sign in to Windows</span></label></div>
+        <div class="drawer-row"><span class="lbl">Screen permission:</span> <span id="perm-screen">ask</span> <button id="btn-revoke" class="link-btn">revoke</button></div>
+        <div class="drawer-row"><span class="lbl">Never capture these apps (comma separated):</span></div>
+        <div class="drawer-row"><input id="blocked-apps" class="text" placeholder="password, bank, wallet"></div>
+        <div class="drawer-row"><span class="lbl" id="mem-stats">Memory: —</span></div>
+        <div class="drawer-row">
+          <button id="btn-forget-today" class="btn">Delete today's memory</button>
+          <button id="btn-forget-all" class="btn">Delete all memory</button>
+        </div>
+        <div class="drawer-row"><span class="lbl" id="usage">Model: —</span></div>
+      </div>
+    </section>
+
+    <div id="toast" class="toast interactive" hidden></div>
+    <div id="bubble" class="bubble interactive" hidden>
+      <div id="bubble-text"></div>
+      <div id="bubble-actions" class="bubble-actions" hidden></div>
+    </div>
+
+    <!-- minimal command bar: what opens when you click the heart. The full panel is opt-in. -->
+    <form id="quick" class="quick interactive" hidden autocomplete="off">
+      <span id="quick-dot" class="quick-dot" title="state"></span>
+      <input id="quick-input" type="text" placeholder="Tell Eli what to do…" spellcheck="false">
+      <button type="button" id="quick-mic" class="icon-btn mic" title="Push to talk (Ctrl+Shift+Space)" aria-label="Push to talk">
+        <svg viewBox="0 0 16 16" width="14" height="14"><rect x="5.5" y="1.5" width="5" height="8" rx="2.5" fill="currentColor"/><path d="M3.5 7.5a4.5 4.5 0 0 0 9 0M8 12v2.5" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linecap="round"/></svg>
+      </button>
+      <button type="button" id="quick-expand" class="icon-btn" title="Open the full panel" aria-label="Open the full panel">
+        <svg viewBox="0 0 16 16" width="14" height="14"><path d="M3 9v4h4M13 7V3H9M13 3L9 7M3 13l4-4" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linecap="round"/></svg>
+      </button>
+    </form>
+
+    <div id="heart-wrap" class="heart-wrap interactive" title="Click to talk to Eli · drag to move">
+      <canvas id="heart" width="160" height="160"></canvas>
+    </div>
+
+    <div id="permission" class="modal interactive" hidden>
+      <div class="modal-card">
+        <div class="modal-title">Allow Eli to see your screen?</div>
+        <div id="permission-text" class="modal-text"></div>
+        <div class="modal-note">Screenshots stay in memory on this PC. They are only sent to the AI model when you ask about your screen. The red dot on the heart shows when Eli is observing. Apps on your block list are never captured.</div>
+        <div class="confirm-actions">
+          <button id="perm-no" class="btn">Not now</button>
+          <button id="perm-yes" class="btn btn-primary">Allow</button>
+        </div>
+      </div>
+    </div>
+
+  </div>
+  <script src="heart.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

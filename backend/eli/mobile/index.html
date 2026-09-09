@@ -1,0 +1,227 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#141824">
+<link rel="manifest" href="/mobile/manifest.json">
+<link rel="icon" href="/mobile/icon.png">
+<link rel="apple-touch-icon" href="/mobile/icon.png">
+<title>Eli</title>
+<style>
+  :root { --bg:#141824; --card:#1E2332; --card-2:#262C3D; --ink:#EEF1F7; --ink-2:#B7BFCF; --muted:#7F899C; --line:rgba(255,255,255,.09); --accent:#F0567A; --teal:#2DC8C4; --rec:#FF3B30; --ok:#4ED28C; --gold:#FFD166; }
+  * { box-sizing:border-box; }
+  html,body { margin:0; background:var(--bg); color:var(--ink); font:15px/1.45 "Segoe UI",system-ui,-apple-system,sans-serif; height:100%; }
+  body { display:flex; flex-direction:column; min-height:100dvh; }
+  header { display:flex; align-items:center; gap:12px; padding:14px 16px 10px; border-bottom:1px solid var(--line); position:sticky; top:0; background:var(--bg); z-index:2; }
+  .heart { width:38px; height:38px; background:url(/mobile/icon.png) center/contain no-repeat; transition:transform .2s; }
+  .heart.talking { animation: bounce .5s infinite; } .heart.thinking, .heart.executing { animation: tilt 1.4s infinite; } .heart.listening { transform:scale(1.12); }
+  @keyframes bounce { 50% { transform: translateY(-3px) scale(1.04);} } @keyframes tilt { 50% { transform: rotate(6deg);} }
+  .title { font-weight:600; font-size:17px; } .sub { color:var(--muted); font-size:12.5px; }
+  .grow { flex:1; }
+  .btn { background:var(--card-2); color:var(--ink); border:1px solid var(--line); border-radius:10px; padding:8px 12px; font:inherit; font-size:13px; }
+  .btn.on { background:var(--teal); color:#0d2b28; border-color:transparent; font-weight:600; }
+  .btn-primary { background:var(--accent); color:#fff; border-color:transparent; font-weight:600; }
+  .btn-sos { background:var(--rec); color:#fff; border-color:transparent; font-weight:700; }
+  .btn-gold { background:var(--gold); color:#14202b; border-color:transparent; font-weight:600; }
+  .bar { display:flex; gap:8px; padding:10px 14px 0; flex-wrap:wrap; }
+  main { flex:1; overflow-y:auto; padding:12px 14px 96px; display:flex; flex-direction:column; gap:10px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:12px; }
+  .card img { width:100%; border-radius:8px; display:block; background:#000; }
+  .cap { color:var(--muted); font-size:12px; margin-top:6px; }
+  .line { max-width:88%; padding:9px 12px; border-radius:14px; }
+  .line.user { align-self:flex-end; background:rgba(240,86,122,.18); border:1px solid rgba(240,86,122,.3); border-bottom-right-radius:4px; }
+  .line.eli { align-self:flex-start; background:var(--card); border:1px solid var(--line); border-bottom-left-radius:4px; white-space:pre-wrap; }
+  .line.sys { align-self:center; color:var(--muted); font-size:12px; }
+  .ask { border-color:rgba(240,86,122,.5); background:rgba(240,86,122,.12); }
+  .ask .t { font-size:11px; text-transform:uppercase; letter-spacing:.08em; color:#FF7A98; } .ask .d { font-weight:600; margin:4px 0 8px; }
+  .row { display:flex; gap:8px; justify-content:flex-end; }
+  form { position:fixed; left:0; right:0; bottom:0; display:flex; gap:8px; padding:10px 12px calc(10px + env(safe-area-inset-bottom)); background:var(--bg); border-top:1px solid var(--line); }
+  input[type=text] { flex:1; background:var(--card); border:1px solid var(--line); color:var(--ink); border-radius:12px; padding:11px 12px; font:inherit; outline:none; min-width:0; }
+  input[type=text]:focus { border-color:rgba(240,86,122,.6); }
+  .mic.live { background:var(--rec); color:#fff; }
+  .pair { padding:24px 16px; text-align:center; color:var(--ink-2); }
+  .pair input { width:100%; margin:10px 0; text-align:center; letter-spacing:.1em; }
+  code { background:rgba(0,0,0,.3); padding:2px 6px; border-radius:6px; }
+  .photo-note { width:100%; margin-top:8px; }
+  .small { font-size:12px; color:var(--muted); }
+</style>
+</head>
+<body>
+<header>
+  <div id="heart" class="heart"></div>
+  <div><div class="title">Eli</div><div id="status" class="sub">connecting…</div></div>
+  <div class="grow"></div>
+  <button id="live" class="btn" type="button">Live view</button>
+</header>
+<div class="bar">
+  <label class="btn" for="cam" style="cursor:pointer">📷 Remember this</label>
+  <input id="cam" type="file" accept="image/*" capture="environment" hidden>
+  <button id="private" class="btn" type="button">Private</button>
+  <button id="sos" class="btn btn-sos" type="button">SOS</button>
+</div>
+
+<main id="main">
+  <section id="pair" class="pair" hidden>
+    <div>Enter the pairing code shown in Eli's panel on your PC (Phone button).</div>
+    <input id="token" type="text" placeholder="pairing code" autocapitalize="off" autocomplete="off">
+    <button id="pairBtn" class="btn btn-primary" type="button">Connect</button>
+  </section>
+  <section id="screen" class="card" hidden>
+    <img id="frame" alt="PC screen">
+    <div id="cap" class="cap">Turn on “See screen” on the PC to stream the screen here.</div>
+  </section>
+  <section id="photo" class="card" hidden>
+    <img id="photo-img" alt="photo to remember">
+    <input id="photo-note" class="photo-note" type="text" placeholder="Optional note, e.g. 'my charger, kitchen drawer'">
+    <div class="row" style="margin-top:8px"><button id="photo-cancel" class="btn" type="button">Cancel</button><button id="photo-save" class="btn btn-primary" type="button">Save to Eli's memory</button></div>
+    <div class="small" style="margin-top:6px">The photo is captioned by the vision model (or OCR offline), stored encrypted on the PC, and can be recalled with questions like “where did I keep my charger?”. Ask Eli to forget it any time.</div>
+  </section>
+  <div id="feed" style="display:contents"></div>
+</main>
+
+<form id="composer">
+  <button id="mic" class="btn mic" type="button" title="Speak">🎤</button>
+  <input id="input" type="text" placeholder="Tell Eli what to do on the PC…" autocomplete="off">
+  <button class="btn btn-primary" type="submit">Send</button>
+</form>
+
+<script>
+(() => {
+  const $ = (s) => document.querySelector(s);
+  const params = new URLSearchParams(location.search);
+  let token = params.get('token') || localStorage.getItem('eli_token') || '';
+  if (params.get('token')) { localStorage.setItem('eli_token', token); history.replaceState({}, '', '/mobile'); }
+  const feed = $('#feed'), status = $('#status'), heart = $('#heart');
+  let ws = null, live = false, liveTimer = null, privateMode = false, pendingPhoto = null;
+
+  function line(cls, text) {
+    const d = document.createElement('div'); d.className = 'line ' + cls; d.textContent = text; feed.appendChild(d);
+    d.scrollIntoView({ block: 'end' });
+    return d;
+  }
+  function ask(m, kind) {
+    const d = document.createElement('div'); d.className = 'card ask';
+    const t = kind === 'permission' ? 'Eli asks for screen access' : (kind === 'nudge' ? 'Eli noticed something' : 'Eli wants to');
+    const noLabel = kind === 'permission' ? 'Not now' : (kind === 'nudge' ? 'Not now' : 'Cancel');
+    const yesLabel = kind === 'permission' ? 'Allow' : (kind === 'nudge' ? 'Yes, look' : 'Approve');
+    d.innerHTML = `<div class="t"></div><div class="d"></div><div class="row"><button class="btn no" type="button"></button><button class="btn btn-primary yes" type="button"></button></div>`;
+    d.querySelector('.t').textContent = t; d.querySelector('.d').textContent = m.description || m.reason || m.text || '';
+    d.querySelector('.no').textContent = noLabel; d.querySelector('.yes').textContent = yesLabel;
+    const answer = (ok) => {
+      if (kind === 'permission') send({ type: 'permission', id: m.id, allow: ok });
+      else if (kind === 'nudge') send({ type: 'nudge_action', id: m.id, action: ok ? 'yes' : 'no' });
+      else send({ type: 'confirm', id: m.id, approve: ok });
+      d.remove(); line('sys', (ok ? yesLabel : noLabel) + ': ' + (m.description || m.reason || m.text || ''));
+    };
+    d.querySelector('.no').onclick = () => answer(false); d.querySelector('.yes').onclick = () => answer(true);
+    feed.appendChild(d); d.scrollIntoView({ block: 'end' });
+    if ('vibrate' in navigator) navigator.vibrate(60);
+  }
+  function notify(title, body) {
+    try { if (window.Notification && Notification.permission === 'granted' && document.hidden) new Notification(title, { body, icon: '/mobile/icon.png' }); } catch (_) {}
+  }
+  function send(o) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(o)); else line('sys', 'Not connected to the PC.'); }
+  async function post(path, body) {
+    const r = await fetch(`${path}?token=${encodeURIComponent(token)}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error || j.detail || r.statusText);
+    return j;
+  }
+
+  function connect() {
+    if (!token) { $('#pair').hidden = false; status.textContent = 'not paired'; return; }
+    $('#pair').hidden = true;
+    const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+    ws = new WebSocket(`${proto}://${location.host}/ws/mobile?token=${encodeURIComponent(token)}`);
+    ws.onopen = () => { status.textContent = 'connected to your PC'; try { window.Notification && Notification.requestPermission && Notification.requestPermission(); } catch (_) {} };
+    ws.onclose = (e) => {
+      heart.className = 'heart';
+      if (e.code === 4401) { status.textContent = 'wrong pairing code'; localStorage.removeItem('eli_token'); token = ''; $('#pair').hidden = false; return; }
+      status.textContent = 'reconnecting…'; setTimeout(connect, 3000);
+    };
+    ws.onmessage = (e) => {
+      const m = JSON.parse(e.data);
+      switch (m.type) {
+        case 'status':
+          privateMode = !!m.private_mode;
+          $('#private').classList.toggle('on', privateMode);
+          status.textContent = `connected · ${m.llm ? m.model : 'offline mode'} · screen ${m.observing ? 'on' : 'off'}${privateMode ? ' · PRIVATE' : ''}`;
+          $('#cap').textContent = m.observing ? 'Live from your PC' : 'Turn on “See screen” on the PC (or say “watch my screen”) to stream it here.';
+          break;
+        case 'state': heart.className = 'heart ' + m.state; break;
+        case 'history': (m.items || []).forEach((it) => line(it.role === 'user' ? 'user' : 'eli', it.text)); break;
+        case 'transcript': line(m.role === 'user' ? 'user' : 'eli', m.text); break;
+        case 'notification': notify(m.title, m.body); break;
+        case 'confirm_request': ask(m, 'confirm'); break;
+        case 'permission_request': ask(m, 'permission'); break;
+        case 'nudge': ask(m, 'nudge'); notify('Eli noticed something', m.text); break;
+        case 'toast': line('sys', m.text); break;
+      }
+    };
+  }
+
+  $('#pairBtn').onclick = () => { token = $('#token').value.trim(); if (token) { localStorage.setItem('eli_token', token); connect(); } };
+  $('#composer').onsubmit = (e) => { e.preventDefault(); const t = $('#input').value.trim(); if (!t) return; send({ type: 'command', text: t }); $('#input').value = ''; };
+  $('#private').onclick = () => send({ type: 'set_setting', key: 'private_mode', value: !privateMode });
+  $('#sos').onclick = async () => {
+    if (!confirm('Send an emergency alert to your PC (Eli will speak it aloud and log it)?')) return;
+    const note = prompt('What is happening? (optional)') || '';
+    try { await post('/api/sos', { note }); line('sys', 'Emergency alert sent to the PC.'); } catch (e) { line('sys', 'SOS failed: ' + e.message); }
+  };
+
+  // live screen view (polls a downscaled JPEG; only works while 'See screen' is on at the PC)
+  function refreshFrame() { $('#frame').src = `/api/frame.jpg?token=${encodeURIComponent(token)}&t=${Date.now()}`; }
+  $('#frame').onerror = () => { $('#cap').textContent = 'Screen observation is off on the PC (or the active app is blocked).'; };
+  $('#live').onclick = () => {
+    live = !live; $('#live').classList.toggle('on', live); $('#screen').hidden = !live;
+    clearInterval(liveTimer);
+    if (live) { refreshFrame(); liveTimer = setInterval(refreshFrame, 3000); }
+  };
+
+  // camera memory: take a photo, add a note, send to the PC for captioning + encrypted storage
+  $('#cam').onchange = () => {
+    const f = $('#cam').files[0];
+    if (!f) return;
+    const img = new Image();
+    img.onload = () => {
+      const max = 1280, s = Math.min(1, max / Math.max(img.width, img.height));
+      const c = document.createElement('canvas'); c.width = Math.round(img.width * s); c.height = Math.round(img.height * s);
+      c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+      pendingPhoto = c.toDataURL('image/jpeg', 0.82);
+      $('#photo-img').src = pendingPhoto; $('#photo').hidden = false; $('#photo').scrollIntoView();
+    };
+    img.src = URL.createObjectURL(f);
+    $('#cam').value = '';
+  };
+  $('#photo-cancel').onclick = () => { $('#photo').hidden = true; pendingPhoto = null; };
+  $('#photo-save').onclick = async () => {
+    if (!pendingPhoto) return;
+    $('#photo-save').disabled = true;
+    try {
+      const r = await post('/api/camera', { image: pendingPhoto, note: $('#photo-note').value.trim() });
+      line('sys', 'Remembered: ' + r.caption);
+      $('#photo').hidden = true; pendingPhoto = null; $('#photo-note').value = '';
+    } catch (e) { line('sys', 'Could not save the photo: ' + e.message); }
+    $('#photo-save').disabled = false;
+  };
+
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  const mic = $('#mic');
+  if (!SR) mic.hidden = true;
+  else mic.onclick = () => {
+    try {
+      const r = new SR(); r.lang = 'en-US'; r.interimResults = false;
+      mic.classList.add('live');
+      r.onresult = (ev) => { const t = ev.results[0][0].transcript; send({ type: 'command', text: t }); };
+      r.onend = () => mic.classList.remove('live');
+      r.onerror = () => { mic.classList.remove('live'); line('sys', 'Voice input is not available here (browsers need HTTPS for the mic). Type instead.'); };
+      r.start();
+    } catch (_) { mic.classList.remove('live'); }
+  };
+
+  connect();
+})();
+</script>
+</body>
+</html>
