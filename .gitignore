@@ -6,6 +6,7 @@ backend/__pycache__/
 desktop/node_modules/
 desktop/dist/
 desktop/build-resources/
+installer/build.log
 android/.gradle/
 android/build/
 android/app/build/

@@ -9,19 +9,38 @@
 const { app, BrowserWindow, ipcMain, screen, Tray, Menu, globalShortcut, nativeImage, shell, Notification } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const http = require('http');
+const { spawn } = require('child_process');
 
 const WIN_W = 420;
 const WIN_H = 620;
 const HEART = { x: 332, y: 538 };          // heart centre inside the window (matches renderer layout)
-const BACKEND_WS = process.env.ELI_BACKEND_URL || 'ws://127.0.0.1:8790/ws/desktop';
-const BACKEND_HTTP = process.env.ELI_BACKEND_HTTP || 'http://127.0.0.1:8790';
 const DEBUG = !!process.env.ELI_DEBUG;
 const OPAQUE = !!process.env.ELI_OPAQUE;
+
+// Installed app: this Electron process also owns the backend's lifecycle (no start.bat, no dev venv).
+// The bundled portable Python + backend source live under process.resourcesPath (see installer/); user
+// data and the API key live under %APPDATA%\Eli, never inside the (read-only) install folder.
+const PACKAGED = app.isPackaged;
+const PORT = Number(process.env.ELI_PORT) || 8790;
+const BACKEND_WS = process.env.ELI_BACKEND_URL || `ws://127.0.0.1:${PORT}/ws/desktop`;
+const BACKEND_HTTP = process.env.ELI_BACKEND_HTTP || `http://127.0.0.1:${PORT}`;
+const USER_DIR = path.join(app.getPath('appData'), 'Eli');
+const USER_ENV = path.join(USER_DIR, '.env');
+function backendPaths() {
+  if (PACKAGED) {
+    return { pythonExe: path.join(process.resourcesPath, 'python', 'python.exe'), backendDir: path.join(process.resourcesPath, 'backend') };
+  }
+  const backendDir = path.join(__dirname, '..', 'backend');
+  return { pythonExe: path.join(backendDir, '.venv', 'Scripts', 'python.exe'), backendDir };
+}
 
 if (process.env.ELI_NO_GPU) app.disableHardwareAcceleration();
 app.setAppUserModelId('app.eli.companion');
 
 let win = null;
+let onboardingWin = null;
+let backendProc = null;
 let guideWin = null;        // full-screen, click-through layer for step indicators
 let guideHideTimer = null;
 let tray = null;
@@ -174,6 +193,85 @@ function createWindow() {
   // Some apps steal the top-most slot; re-assert it every 20 s (cheap).
   setInterval(() => { if (win && !win.isDestroyed()) win.setAlwaysOnTop(true, 'screen-saver'); }, 20000);
 }
+
+// ---------- backend lifecycle (packaged app only; dev mode keeps using start.bat) ------------------------
+function waitForHealth(timeoutMs) {
+  return new Promise((resolve) => {
+    const deadline = Date.now() + timeoutMs;
+    (function poll() {
+      const req = http.get(`${BACKEND_HTTP}/health`, { timeout: 1500 }, (res) => { res.resume(); resolve(res.statusCode === 200); });
+      req.on('error', () => { if (Date.now() > deadline) resolve(false); else setTimeout(poll, 500); });
+      req.on('timeout', () => { req.destroy(); if (Date.now() > deadline) resolve(false); else setTimeout(poll, 500); });
+    })();
+  });
+}
+function startBackend() {
+  if (backendProc || !PACKAGED) return;
+  const { pythonExe, backendDir } = backendPaths();
+  if (!fs.existsSync(pythonExe)) { log('bundled python not found at', pythonExe); return; }
+  fs.mkdirSync(USER_DIR, { recursive: true });
+  const logDir = path.join(USER_DIR, 'logs');
+  fs.mkdirSync(logDir, { recursive: true });
+  const out = fs.openSync(path.join(logDir, 'server.log'), 'a');
+  const err = fs.openSync(path.join(logDir, 'server.err.log'), 'a');
+  backendProc = spawn(pythonExe, ['run.py'], {
+    cwd: backendDir,
+    env: { ...process.env, ELI_USER_DIR: USER_DIR, ELI_PORT: String(PORT), PYTHONIOENCODING: 'utf-8' },
+    windowsHide: true,
+    stdio: ['ignore', out, err],
+  });
+  backendProc.on('exit', (code) => { log('backend exited', code); backendProc = null; });
+  backendProc.on('error', (e) => log('backend spawn failed', e));
+  log('backend starting:', pythonExe, 'cwd', backendDir);
+}
+function stopBackend() {
+  if (backendProc) { try { backendProc.kill(); } catch (_) { /* ignore */ } backendProc = null; }
+}
+
+// ---------- first-run onboarding (packaged app only) ------------------------------------------------------
+function setupDone() {
+  return fs.existsSync(USER_ENV) && /ELI_SETUP_DONE=1/.test(fs.readFileSync(USER_ENV, 'utf8'));
+}
+function writeUserEnv(provider, key) {
+  fs.mkdirSync(USER_DIR, { recursive: true });
+  const lines = ['ELI_SETUP_DONE=1'];
+  if (provider === 'gemini' && key) { lines.push('ELI_LLM_PROVIDER=gemini', `GEMINI_API_KEY=${key}`); }
+  else if (provider === 'anthropic' && key) { lines.push('ELI_LLM_PROVIDER=anthropic', `ANTHROPIC_API_KEY=${key}`); }
+  fs.writeFileSync(USER_ENV, lines.join('\n') + '\n', { mode: 0o600 });
+}
+function writeInitialSettings(voice) {
+  const dataDir = path.join(USER_DIR, 'data');
+  fs.mkdirSync(dataDir, { recursive: true });
+  const p = path.join(dataDir, 'settings.json');
+  if (fs.existsSync(p)) return;
+  fs.writeFileSync(p, JSON.stringify({ voice_replies: !!voice }, null, 2));
+}
+function createOnboardingWindow() {
+  onboardingWin = new BrowserWindow({
+    width: 460, height: 520, resizable: false, frame: true, title: 'Set up Eli', show: false, center: true,
+    icon: path.join(__dirname, 'assets', 'heart-256.png'), backgroundColor: '#141824',
+    webPreferences: { preload: path.join(__dirname, 'onboarding-preload.js'), contextIsolation: true, nodeIntegration: false },
+  });
+  onboardingWin.setMenuBarVisibility(false);
+  onboardingWin.loadFile(path.join(__dirname, 'onboarding', 'onboarding.html'));
+  onboardingWin.once('ready-to-show', () => onboardingWin.show());
+  onboardingWin.on('closed', () => { onboardingWin = null; if (!win) app.quit(); });
+}
+ipcMain.handle('onboarding-finish', async (_e, data) => {
+  try {
+    writeUserEnv(data.provider, data.key);
+    writeInitialSettings(data.voice);
+    if (data.autostart) { try { app.setLoginItemSettings({ openAtLogin: true, path: process.execPath }); } catch (_) { /* ignore */ } }
+    if (onboardingWin) onboardingWin.webContents.send('onboarding-progress', 'Starting Eli…');
+    startBackend();
+    await waitForHealth(25000); // best-effort; the overlay reconnects on its own either way
+    launchMainApp();
+    if (onboardingWin) { const w = onboardingWin; onboardingWin = null; w.close(); }
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: String(e && e.message ? e.message : e) };
+  }
+});
 
 function firstRunNotice() {
   try {
@@ -337,8 +435,7 @@ function bringHere() {
 }
 
 // ---------- app ---------------------------------------------------------------------------------------
-app.whenReady().then(() => {
-  if (!gotLock) return;
+function launchMainApp() {
   createWindow();
   try {
     tray = new Tray(nativeImage.createFromPath(path.join(__dirname, 'assets', 'heart.png')));
@@ -364,8 +461,22 @@ app.whenReady().then(() => {
   globalShortcut.register('Control+Shift+F', () => sendShortcut('toggle-follow'));
   setInterval(pollCursor, 40);
   screen.on('display-removed', () => glideHome(300));
+}
+
+app.whenReady().then(async () => {
+  if (!gotLock) return;
+  if (PACKAGED && !setupDone()) {
+    createOnboardingWindow();   // launchMainApp() runs once onboarding finishes
+    return;
+  }
+  if (PACKAGED) {
+    startBackend();
+    // Don't block the window on backend health: the overlay shows offline/reconnecting and
+    // connects itself within a few seconds once the backend is up (see renderer/app.js).
+  }
+  launchMainApp();
 });
 
 app.on('second-instance', () => { bringHere(); sendShortcut('toggle-panel'); });
-app.on('will-quit', () => globalShortcut.unregisterAll());
+app.on('will-quit', () => { globalShortcut.unregisterAll(); stopBackend(); });
 app.on('window-all-closed', () => app.quit());

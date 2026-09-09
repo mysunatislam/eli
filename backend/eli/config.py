@@ -13,7 +13,15 @@ from dotenv import load_dotenv
 BACKEND_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(BACKEND_DIR / ".env")
 
-DATA_DIR = Path(os.getenv("ELI_DATA_DIR", str(BACKEND_DIR / "data")))
+# Installed-app layout: the app bundle (BACKEND_DIR, under Program Files) is read-only, so user data
+# and secrets live under %APPDATA%\Eli instead. ELI_USER_DIR is set by the desktop app when packaged;
+# a .env there is loaded on top of (and overrides) the bundled one, and DATA_DIR defaults into it.
+USER_DIR = Path(os.getenv("ELI_USER_DIR")) if os.getenv("ELI_USER_DIR") else None
+if USER_DIR:
+    USER_DIR.mkdir(parents=True, exist_ok=True)
+    load_dotenv(USER_DIR / ".env", override=True)
+
+DATA_DIR = Path(os.getenv("ELI_DATA_DIR", str(USER_DIR / "data" if USER_DIR else BACKEND_DIR / "data")))
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 SETTINGS_PATH = DATA_DIR / "settings.json"
 MOBILE_DIR = Path(__file__).resolve().parent / "mobile"

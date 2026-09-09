@@ -224,6 +224,30 @@ The model can also create jobs itself (`schedule_task`, `list_tasks`, `cancel_ta
 
 **Guide card.** The step card is now a compact 330 px card docked in a screen corner (it moves to the opposite corner from the target), one step at a time, with the instruction clipped to three lines (the full text is spoken and in the transcript). Recognition and hints are a slim toast along the top edge.
 
+## Building an installable app for another laptop
+
+`install.bat` / `start.bat` are for *this* machine, where you already have Python and Node. To hand
+Eli to a laptop that has neither, build a real Windows installer once, here:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File installer\build-installer.ps1
+```
+
+This downloads a portable Python runtime, installs every backend dependency into it, and packages
+it together with the Electron overlay into a single NSIS installer:
+`desktop\dist\Eli-Setup-<version>.exe` (roughly 350–450 MB — it carries its own Python, so the other
+laptop needs nothing pre-installed). Building takes a few minutes and needs internet access on *this*
+machine only. Re-run it after any code change you want to ship; it always rebuilds the installer from
+the current source.
+
+**On the other laptop:** copy `Eli-Setup-<version>.exe` over (USB drive, cloud, whatever) and double-click
+it — no admin rights needed, it installs to `%LocalAppData%\Programs\Eli`. First launch shows a short
+setup screen: pick Gemini or Claude and paste an API key (or skip for offline mode), choose whether Eli
+should start at sign-in and speak replies, then it starts itself — no separate `start.bat`, no console
+windows. The heart appears the same way it does here. The API key and all data are written to
+`%APPDATA%\Eli` (never inside the install folder, so re-installing or updating never touches them).
+Uninstall from Windows Settings ▸ Apps, same as any other app.
+
 ## Starting with Windows
 
 Eli is two processes (the Python backend and the Electron overlay). To have them come back on their own after a reboot, enable the startup entry once:
