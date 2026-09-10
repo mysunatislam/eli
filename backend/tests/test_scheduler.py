@@ -96,6 +96,7 @@ async def main():
     mem = MemoryAgent(config.DATA_DIR)
     hub, agent = Hub(), StubAgent()
     sch = Scheduler(hub, Settings(), mem, agent)
+    now = time.time()   # re-anchor: memory init above can take seconds (keyring access)
     j = sch.add_from_text("in 5 seconds to drink water", kind="reminder")
     check(j and j["kind"] == "reminder" and j["text"] == "drink water" and 0 < j["next_run"] - now < 8, f"reminder parsed: {j and j['text']}")
     r = sch.add_from_text("every hour check whether the build passed", kind="recurring")

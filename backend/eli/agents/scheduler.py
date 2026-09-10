@@ -21,7 +21,7 @@ from .. import timeparse
 log = logging.getLogger("eli.scheduler")
 
 MIN_EVERY = 60
-DEFAULT_MAX_RUNS = 500
+DEFAULT_MAX_RUNS = 10000   # ~7 days at one run/min; long watches must not expire silently
 WATCH_EVERY = 120
 
 
@@ -113,7 +113,12 @@ class Scheduler:
                   "This run happens automatically. Do what it asks with your tools, briefly. "
                   "If nothing needs the user's attention right now, reply with exactly NO_CHANGE and nothing else. ")
         if job.get("until_done"):
-            prompt += f"When the goal is fully achieved, call finish_task with job_id={jid} and a one-line summary."
+            prompt += (
+                f"This is a standing watch. Call finish_task with job_id={jid} ONLY if the job text names a definite end state "
+                "(e.g. 'until the download finishes') AND that end state has clearly been reached now. "
+                "If the job is open-ended (words like 'whenever', 'always', 'keep', 'automatically', or no end condition), it runs until "
+                "the user cancels it: NEVER call finish_task for it, no matter how many runs found nothing - just act or reply NO_CHANGE."
+            )
         try:
             reply = await self.agent.handle(prompt, source="scheduler")
         except Exception as e:
