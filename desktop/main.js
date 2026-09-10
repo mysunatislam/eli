@@ -181,7 +181,10 @@ function createWindow() {
     const serious = lvl === 2 || lvl === 3 || lvl === 'warning' || lvl === 'error';
     if (msg && (serious || DEBUG)) console.log('[renderer]', msg);
   });
-  win.webContents.on('render-process-gone', (_e, details) => log('renderer gone:', details.reason));
+  win.webContents.on('render-process-gone', (_e, details) => {
+    log('renderer gone:', details.reason);
+    if (!quitting && win && !win.isDestroyed()) setTimeout(() => { try { win.webContents.reload(); } catch (_) { if (!win.isDestroyed()) win.close(); } }, 1000);
+  });
   if (process.env.ELI_DEVTOOLS) win.webContents.openDevTools({ mode: 'detach' });
 
   setTimeout(() => {
@@ -477,6 +480,11 @@ app.whenReady().then(async () => {
   launchMainApp();
 });
 
-app.on('second-instance', () => { bringHere(); sendShortcut('toggle-panel'); });
-app.on('will-quit', () => { globalShortcut.unregisterAll(); stopBackend(); });
+app.on('second-instance', () => {
+  if (!win) { log('second instance while window is gone; recreating'); createWindow(); return; }
+  bringHere();
+  sendShortcut('toggle-panel');
+});
+app.on('before-quit', () => { quitting = true; });
+app.on('will-quit', () => { quitting = true; globalShortcut.unregisterAll(); stopBackend(); });
 app.on('window-all-closed', () => app.quit());
