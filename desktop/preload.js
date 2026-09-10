@@ -24,6 +24,8 @@ contextBridge.exposeInMainWorld('eli', {
   // guide overlay
   guide: (m) => ipcRenderer.send('guide-event', m),
   guideState: (s) => ipcRenderer.send('guide-state', s),
+  guideCheck: (g) => ipcRenderer.send('guide-check', g),
+  onGuideResend: (cb) => ipcRenderer.on('guide-resend', () => cb()),
   // shortcuts from the tray / global hotkeys
   onShortcut: (cb) => ipcRenderer.on('shortcut', (_e, name) => cb(name)),
 });

@@ -34,8 +34,12 @@ if (-not (Backend-Up)) {
   if (-not $ok) { Write-Host "Backend did not come up on port $port. See backend\data\server.log." -ForegroundColor Yellow }
 }
 
-# Overlay (a second launch only brings the existing heart forward: single-instance)
+# Overlay (a second launch only brings the existing heart forward: single-instance).
+# Its stdout/stderr always go to backend\data\electron.log so window failures are diagnosable.
 $env:ELI_BACKEND_URL = "ws://127.0.0.1:$port/ws/desktop"
 $env:ELI_BACKEND_HTTP = "http://127.0.0.1:$port"
-Start-Process -FilePath $electron -ArgumentList "." -WorkingDirectory $desktop -WindowStyle Hidden
+$logDir = Join-Path $backend "data"
+New-Item -ItemType Directory -Force $logDir | Out-Null
+Start-Process -FilePath $electron -ArgumentList "." -WorkingDirectory $desktop -WindowStyle Hidden `
+  -RedirectStandardOutput (Join-Path $logDir "electron.log") -RedirectStandardError (Join-Path $logDir "electron.err.log")
 if (-not $Hidden) { Write-Host "Eli is starting: look for the heart at the bottom-right. Ctrl+Shift+E opens the panel." -ForegroundColor Green }

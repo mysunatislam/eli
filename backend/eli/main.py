@@ -334,6 +334,8 @@ async def handle_message(msg: dict, source: str) -> None:
         asyncio.create_task(guide.control(str(msg.get("action", ""))))
     elif t == "guide_start":
         asyncio.create_task(agent.handle("guide me through " + str(msg.get("request", "merging the holes")), source))
+    elif t == "guide_resend":
+        guide.resend()
     elif t == "get_status":
         hub.emit(status_payload())
 

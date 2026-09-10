@@ -392,10 +392,40 @@ function forwardGuide(m) {
   } else if (!gw.isVisible() && m.action !== 'speaking') {
     gw.showInactive();
   }
+  if (['show', 'recognized', 'resumed', 'stuck', 'hint'].includes(m.action)) verifyGuideVisible(payload, disp);
   dbg('guide', m.action, conv.length, 'indicators');
+}
+// The layer once silently failed to appear (no error anywhere, no arrows for the user). After any
+// indicator-bearing event, confirm it is actually visible; if not, rebuild it and replay the payload.
+function verifyGuideVisible(payload, disp) {
+  setTimeout(() => {
+    try {
+      if (guideWin && !guideWin.isDestroyed() && guideWin.isVisible()) return;
+      log('guide layer did not appear after', payload.action, '- rebuilding it');
+      try { if (guideWin && !guideWin.isDestroyed()) guideWin.destroy(); } catch (_) { /* already gone */ }
+      guideWin = null;
+      const gw = ensureGuideWindow(disp);
+      const send = () => { if (gw && !gw.isDestroyed()) { gw.webContents.send('guide', payload); gw.showInactive(); } };
+      if (gw.webContents.isLoading()) gw.webContents.once('did-finish-load', send); else send();
+    } catch (err) { log('guide layer rebuild failed', err); }
+  }, 1200);
 }
 ipcMain.on('guide-event', (_e, m) => { try { forwardGuide(m || {}); } catch (err) { log('guide event failed', err); } });
 ipcMain.on('guide-state', (_e, s) => { if (guideWin && !guideWin.isDestroyed()) guideWin.webContents.send('guide-state', s); });
+// Watchdog: the backend says a guide is running but the indicator layer is gone/hidden (it once
+// silently failed to appear and the user saw no arrows at all) - recreate it and re-request the step.
+let guideCheckAt = 0;
+ipcMain.on('guide-check', (_e, g) => {
+  try {
+    if (!g || !g.active || Date.now() - guideCheckAt < 5000) return;
+    if (!guideWin || guideWin.isDestroyed() || !guideWin.isVisible()) {
+      guideCheckAt = Date.now();
+      log('guide active but the indicator layer is missing; recreating and asking for a resend');
+      ensureGuideWindow();
+      if (win && !win.isDestroyed()) win.webContents.send('guide-resend');
+    }
+  } catch (err) { log('guide check failed', err); }
+});
 
 // ---------- IPC ---------------------------------------------------------------------------------------
 ipcMain.on('set-hit-regions', (_e, regions) => { hitRegions = Array.isArray(regions) ? regions : []; });

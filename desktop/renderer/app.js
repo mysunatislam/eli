@@ -32,9 +32,14 @@
 
   function handle(m) {
     switch (m.type) {
-      case 'status': status = m; renderStatus(); if (m.state) { heart.setState(m.state); setPill(m.state); } break;
+      case 'status': status = m; renderStatus(); if (m.state) { heart.setState(m.state); setPill(m.state); } if (m.guide) window.eli.guideCheck(m.guide); break;
       case 'state': heart.setState(m.state); setPill(m.state); $('#btn-stop').hidden = m.state !== 'talking'; $('#quick-dot').className = 'quick-dot ' + m.state; window.eli.guideState(m.state); break;
-      case 'guide': window.eli.guide(m); if (m.action === 'show' && m.step) heart.setState('executing'); break;
+      case 'guide':
+        window.eli.guide(m);
+        if (m.action === 'show' && m.step) heart.setState('executing');
+        // the indicator layer once silently failed to appear: after any step event, have main verify it
+        if (m.action === 'show' || m.action === 'recognized' || m.action === 'resumed') setTimeout(() => window.eli.guideCheck({ active: true }), 1600);
+        break;
       case 'transcript_delta': liveDelta(m); break;
       case 'transcript':
         finishLive();
@@ -400,6 +405,9 @@
     if (name === 'toggle-follow') send({ type: 'set_setting', key: 'follow_cursor', value: status.follow_cursor === false });
     if (name === 'toggle-trust') send({ type: 'set_setting', key: 'trust_mode', value: !status.trust_mode });
   });
+
+  // main noticed the guide indicator layer is missing mid-guide: ask the backend to re-emit the step
+  window.eli.onGuideResend(() => { if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: 'guide_resend' })); });
 
   // ---------- boot ----------
   console.debug('[boot] renderer ready');
