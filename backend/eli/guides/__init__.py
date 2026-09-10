@@ -1,6 +1,8 @@
 """Guided workflows: data-driven, step-by-step procedures Eli walks the user through with on-screen
 indicators and narration. Each workflow has one variant per CAD application (the logical steps are the
-same, the UI labels and shortcuts differ).
+same, the UI labels and shortcuts differ). Workflows come from two places: the built-ins registered
+below, and eli/guides/planner.py, which writes one on the fly for any goal in any app by looking at
+the live screen (same step schema, so the engine runs both identically).
 
 Step fields
     id           short identifier

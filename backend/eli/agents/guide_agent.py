@@ -1,5 +1,9 @@
 """Guide Agent: precise, step-by-step, narrated guidance drawn over the application.
 
+Workflows are either built-in (eli/guides) or planned live: for any other goal ("teach me to bevel
+this edge in Blender") the agent looks at the current app and has the vision model write the steps
+in the same schema, validated by eli/guides/planner before anything runs.
+
 For each step of a workflow (see eli/guides):
   1. resolve the target on the current frame — UI text via OCR (exact button), geometry via the vision
      model (bounding boxes), keys, or a region of the app window — and send indicators (rings, glowing
@@ -112,6 +116,79 @@ class GuideAgent:
                         return key, title
         return None
 
+    # -- dynamic guides: plan the steps from the live screen ----------------------------------------------
+    STOP_WORDS = frozenset("""guide step steps this that these those with want need learn teach show help make create
+        using into from then them they when what where which like about screen window open close first please could
+        would should there here doing done thing things want wants how why""".split())
+
+    async def _focus_named_app(self, goal: str) -> None:
+        """If the goal names an app that is open but not in front (e.g. "in Blender"), bring it forward."""
+        if self.auto is None:
+            return
+        words = [w for w in re.findall(r"[a-z]{4,}", goal.lower()) if w not in self.STOP_WORDS]
+        if not words:
+            return
+        win = self.vision.user_window()
+        cur = ((getattr(win, "title", "") or "") + " " + (getattr(win, "process", "") or "")).lower()
+        if any(w in cur for w in words):
+            return  # already in the named app
+        def _scan():
+            try:
+                import pygetwindow as gw  # type: ignore
+                return [(w.title or "") for w in gw.getAllWindows() if w.title and not w.isMinimized]
+            except Exception:
+                return []
+        for title in await asyncio.to_thread(_scan):
+            low = title.lower()
+            if any(w in low for w in words):
+                r = await asyncio.to_thread(self.auto.focus_window, title)
+                if r.startswith("Switched"):
+                    await asyncio.sleep(0.8)
+                return
+
+    async def _plan_dynamic(self, goal: str):
+        """Plan a workflow for `goal` from the current screen. Returns a wf dict, or a str to tell the user."""
+        if not self.llm.available:
+            return "My vision model is offline right now, so I can't plan a new guide. Try again in a bit."
+        await self._focus_named_app(goal)
+        frame = await asyncio.to_thread(self.vision.capture_now)
+        if getattr(frame, "blocked", False):
+            return "That window is on my do-not-watch list, so I can't guide you there."
+        win = frame.window
+        if not ((getattr(win, "title", "") or "").strip() or (getattr(win, "process", "") or "").strip()):
+            return "I can't tell which app you're in. Click into the app you want to learn and ask me again."
+        self.hub.set_state("thinking")
+        self.hub.transcript("eli", f"Let me look at {win.title or 'your screen'} and work out the steps for: {goal}")
+        self._say("Give me a moment. I'm looking at your screen and working out the steps.")
+        await asyncio.to_thread(frame.ocr)
+        try:
+            text = await asyncio.to_thread(frame.window_text, 3500)
+        except Exception:
+            text = ""
+        from ..guides import planner
+        wf = await planner.plan(self.llm, self.vision, frame, goal, text)
+        if not wf:
+            return ("I couldn't work out reliable on-screen steps for that here. Try asking from inside the app you "
+                    "want to learn, or ask me to explain it in words instead.")
+        return wf
+
+    async def _fresh_hint(self, step: dict) -> str:
+        """A screenshot-grounded alternative tip for a dynamic step that has no canned alt."""
+        if not self.llm.available:
+            return ""
+        try:
+            frame = await asyncio.to_thread(self.vision.capture_now)
+            b64, media = self.vision.model_image(frame)
+            q = (f"The user is in {self.app_label} trying to: {step['instruction']} They seem stuck. From this "
+                 "screenshot, give ONE short spoken tip (max 2 sentences): another way to do it, or what is blocking "
+                 "them right now. Plain text, no markdown.")
+            r = await self.llm.complete(("You help a user through a desktop application by looking at their screen. Be concrete and brief.", ""),
+                                        [{"role": "user", "parts": [image_part(media, b64), text_part(q)]}], [])
+            return r.text.strip()[:300]
+        except Exception as e:
+            log.info("fresh hint failed: %s", e)
+            return ""
+
     def resend(self) -> None:
         """Re-emit the current step (an overlay that reconnected mid-guide catches up)."""
         if self.active and self.last_show:
@@ -126,9 +203,6 @@ class GuideAgent:
     # -- lifecycle ----------------------------------------------------------------------------------------
     async def start(self, request: str = "", workflow_id: str = "", app: str = "") -> str:
         wf = WORKFLOWS.get(workflow_id) or find_workflow(request or workflow_id)
-        if not wf:
-            return ("I don't have a guided workflow for that yet. I can guide: " +
-                    ", ".join(w["name"] for w in WORKFLOWS.values()) + ".")
         if self.settings.get("private_mode"):
             return "Private mode is on, so I can't watch the screen to guide you. Turn it off and ask again."
         ok = await self.broker.ensure_screen("Eli needs to watch the screen to guide you step by step.")
@@ -136,6 +210,13 @@ class GuideAgent:
             return "I need to see the screen to guide you. Allow screen access and ask again."
         if self.active:
             self.stop(silent=True)
+        if not wf:
+            goal = (request or workflow_id or "").strip()
+            if not goal:
+                return "Tell me what you want to be guided through - for example: guide me to merge these five holes."
+            wf = await self._plan_dynamic(goal)
+            if isinstance(wf, str):
+                return wf
         self.wf = wf
         win = self.vision.user_window()
         hinted = app if app in wf["apps"] else self._app_from_text(request)
@@ -195,7 +276,11 @@ class GuideAgent:
             inds = [{"kind": "box", "x": x, "y": y, "w": w, "h": h, "label": f"{i+1}", "glow": True} for i, (x, y, w, h, _l) in enumerate(boxes)]
             self._emit({"action": "recognized", "indicators": inds, "text": f"{len(boxes)} holes found"})
             n = len(boxes)
-            say = rec.get("say", "").format(n=n)
+            say = rec.get("say", "")
+            try:
+                say = say.format(n=n)
+            except (KeyError, IndexError, ValueError):
+                pass  # planned narration may contain literal braces
             if rec.get("expected_count") and n != rec["expected_count"]:
                 say += f" I expected {rec['expected_count']} but count {n}; I'll guide you through the same steps anyway."
             self._say(say)
@@ -271,7 +356,10 @@ class GuideAgent:
             return "" if self.active else "Done."
         if a in ("alt", "alternative", "help"):
             step = self.steps[self.idx]
-            alt = step.get("alt") or "There's no alternative route for this step; take it slowly and say repeat if you want to hear it again."
+            alt = step.get("alt")
+            if not alt and self.wf.get("dynamic"):
+                alt = await self._fresh_hint(step)
+            alt = alt or "There's no alternative route for this step; take it slowly and say repeat if you want to hear it again."
             self._emit({"action": "hint", "text": alt})
             self.hub.transcript("eli", alt)
             self._say(alt)

@@ -86,10 +86,14 @@ DESIGN_TOOLS = [
     _t("list_tasks", "List scheduled jobs (reminders, recurring checks, watches).", {}),
     _t("cancel_task", "Cancel a scheduled job by id.", {"job_id": {"type": "integer"}}, ["job_id"]),
     _t("finish_task", "Mark a watch/recurring job as achieved so it stops running.", {"job_id": {"type": "integer"}, "summary": {"type": "string"}}, ["job_id"]),
-    _t("start_guide", "Start an on-screen, narrated, step-by-step guide for a known CAD workflow. Eli highlights exactly where to "
-       "click, speaks each step, watches the viewport and advances automatically. Use when the user asks how to do a modelling "
-       "operation a guide exists for (e.g. merging holes while keeping the separating curves).",
-       {"workflow_id": {"type": "string", "enum": ["merge_holes"]}, "app": {"type": "string", "enum": ["fusion360", "onshape", "solidworks", "blender"]}}, ["workflow_id"]),
+    _t("start_guide", "Start an on-screen, narrated, step-by-step guide: Eli highlights exactly where to click, speaks each step, "
+       "watches the screen and advances only when the step was done right. For the built-in merge_holes workflow pass workflow_id. "
+       "For ANY other skill the user wants to learn hands-on in an app that's open (CAD, Blender, editors, anything), pass their "
+       "goal in `goal` - Eli looks at the screen and plans the steps itself. Prefer this over describing steps in text whenever "
+       "the user wants to DO something in an app in front of them.",
+       {"goal": {"type": "string", "description": "What the user wants to do or learn, in their words."},
+        "workflow_id": {"type": "string", "enum": ["merge_holes"]},
+        "app": {"type": "string", "description": "App name if the user said one (e.g. freecad, blender)."}}),
     _t("guide_control", "Control the running guide: next, repeat, back, skip, alt (alternative), stop.",
        {"action": {"type": "string", "enum": ["next", "repeat", "back", "skip", "alt", "stop"]}}, ["action"]),
     _t("solidworks_check", "Rebuild the active SolidWorks document and report feature errors/warnings, mass properties, and interferences "
@@ -180,7 +184,7 @@ def describe_action(name: str, args: dict) -> str:
     if name == "solidworks_check":
         return "check the SolidWorks document"
     if name == "start_guide":
-        return f"start the {a.get('workflow_id', '')} guide"
+        return "start a guide: " + str(a.get("goal") or a.get("workflow_id") or "")
     if name == "schedule_task":
         return f"schedule: {a.get('text', '')}"
     if name == "cancel_task":

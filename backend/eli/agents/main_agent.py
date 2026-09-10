@@ -46,7 +46,7 @@ Your senses and hands (tools):
 - DESIGN: review_design for screenshots of CAD or drawing apps (say what you can and cannot verify from pixels), check_mesh_file for real measurements on STL/OBJ, blender_check_file / blender_check_live / blender_run_python for real Blender geometry (the live tools need the Eli Bridge add-on), solidworks_check for the open SolidWorks document (rebuild errors, mass properties, interferences). Plan multi-step engineering work as numbered workflows and save_workflow so you can mentor step by step.
 - COMMUNICATE: compose_email (drafts only, with attachments), open_chat. You never send messages.
 - REMEMBER: remember / recall / forget, remember_project / open_project for the knowledge graph. Store preferences and facts the user states (third person, one sentence). Use what you remember to tailor answers.
-- GUIDE: start_guide runs a narrated, on-screen, step-by-step walkthrough for known CAD workflows (merge_holes: merge five holes while keeping the separating curves) in Fusion 360, Onshape, SolidWorks or Blender. Prefer it over describing the steps in text when a guide exists. guide_control drives it.
+- GUIDE: start_guide runs a narrated, on-screen, step-by-step walkthrough drawn over the app: arrows and rings on exactly what to click, spoken steps, and auto-advance when the screen shows the step was done right. It knows merge_holes (workflow_id) and can guide ANY other hands-on skill in an open app: pass the user's goal in `goal` and Eli plans the steps from the live screen. Prefer it over describing steps in text whenever the user wants to learn or do something in an app in front of them. guide_control drives it.
 - SCHEDULE: when the user gives you continuous or future work ("keep checking…", "every hour…", "remind me…", "watch … until …", "later"), call schedule_task immediately so it survives idle time and restarts, then confirm in one line. In a scheduled run, be brief and reply NO_CHANGE when there is nothing to report.
 - LEARN: screenshots of errors come with "Past fixes that worked" when memory has them; try those first. After a fix is verified (tests pass, error gone), call remember with kind "solution": what the error was, the cause, the exact fix. That is how you get better at this user's problems.
 
@@ -173,7 +173,8 @@ class ToolExecutor:
         if name in ("schedule_task", "list_tasks", "cancel_task", "finish_task") and self.scheduler is not None:
             return ToolResult(self._schedule_tool(name, args))
         if name == "start_guide" and self.guide is not None:
-            return ToolResult(await self.guide.start(workflow_id=str(args.get("workflow_id", "")), app=str(args.get("app", ""))))
+            return ToolResult(await self.guide.start(request=str(args.get("goal", "")),
+                                                     workflow_id=str(args.get("workflow_id", "")), app=str(args.get("app", ""))))
         if name == "guide_control" and self.guide is not None:
             return ToolResult(await self.guide.control(str(args.get("action", ""))) or "ok")
         if name in ("look_at_screen", "review_design"):
@@ -616,9 +617,11 @@ class MainAgent:
             if guide is None:
                 return None
             from ..guides import find_workflow
-            if find_workflow(arg):
-                return await guide.start(request=arg)
-            return None  # no workflow for that: the model answers normally
+            low = raw.lower()
+            explicit = any(p in low for p in ("guide me", "walk me through", "show me how", "teach me", "step by step"))
+            if find_workflow(arg) or explicit:
+                return await guide.start(request=arg)   # built-in workflow, or plan one from the live screen
+            return None  # a bare "help me ...": the model decides (it can still call start_guide)
         if kind in ("guide_next", "guide_repeat", "guide_back", "guide_skip", "guide_alt", "guide_stop"):
             if guide is None or not guide.active:
                 if kind == "guide_next" and self.executor.pending:
