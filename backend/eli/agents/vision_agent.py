@@ -24,6 +24,23 @@ from PIL import Image, ImageOps
 
 log = logging.getLogger("eli.vision")
 
+def ensure_interactive_desktop() -> bool:
+    """Ensure the calling thread is attached to the active user desktop (Default)."""
+    import os
+    if os.name != "nt":
+        return False
+    try:
+        user32 = ctypes.windll.user32
+        DESKTOP_ALL = 0x1FF
+        h = user32.OpenInputDesktop(0, False, DESKTOP_ALL)
+        if not h:
+            h = user32.OpenDesktopW("Default", 0, False, DESKTOP_ALL)
+        if h:
+            return bool(user32.SetThreadDesktop(h))
+    except Exception as e:
+        log.debug("ensure_interactive_desktop error: %s", e)
+    return False
+
 try:
     import mss  # type: ignore
 except Exception:  # pragma: no cover
@@ -83,6 +100,7 @@ class OcrLine:
 
 def active_window() -> WindowInfo:
     """Foreground window title + owning process, via Win32 (no extra deps)."""
+    ensure_interactive_desktop()
     try:
         user32 = ctypes.windll.user32
         hwnd = user32.GetForegroundWindow()
@@ -323,14 +341,24 @@ class VisionAgent:
             time.sleep(self.interval)
 
     def _grab(self, sct) -> Frame:
-        mon = sct.monitors[1]
-        shot = sct.grab(mon)
-        self.captures += 1
+        ensure_interactive_desktop()
         win = self.user_window()
         if self.blocked(win):
             return Frame(image=Image.new("RGB", (8, 8), "black"), ts=time.time(), window=win, blocked=True)
-        img = Image.frombytes("RGB", shot.size, shot.bgra, "raw", "BGRX")
-        return Frame(image=img, ts=time.time(), window=win)
+        try:
+            mon = sct.monitors[1]
+            shot = sct.grab(mon)
+            self.captures += 1
+            img = Image.frombytes("RGB", shot.size, shot.bgra, "raw", "BGRX")
+            return Frame(image=img, ts=time.time(), window=win)
+        except Exception as e:
+            try:
+                from PIL import ImageGrab
+                img = ImageGrab.grab()
+                self.captures += 1
+                return Frame(image=img, ts=time.time(), window=win)
+            except Exception:
+                return Frame(image=Image.new("RGB", (1920, 1080), "white"), ts=time.time(), window=win)
 
     def user_window(self) -> WindowInfo:
         """The window the user is working in: ignores Eli's own overlay (which takes focus when clicked)."""
@@ -355,6 +383,7 @@ class VisionAgent:
     # -- queries ---------------------------------------------------------------------------------
     def capture_now(self) -> Frame:
         """Fresh capture regardless of the background loop. Honors the block list and private mode."""
+        ensure_interactive_desktop()
         if self.settings.get("private_mode"):
             return Frame(image=Image.new("RGB", (8, 8), "black"), ts=time.time(), window=self.user_window(), blocked=True)
         with mss.mss() as sct:

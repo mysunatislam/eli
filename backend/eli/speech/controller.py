@@ -49,9 +49,11 @@ class SpeechController:
             threading.Thread(target=self.transcriber.load, name="eli-whisper-load", daemon=True).start()
 
     def dispatch(self, text: str, source: str) -> None:
-        text = intents.strip_wake(text).strip()
-        if text:
-            self.on_command(text, source)
+        log.info("Controller dispatching text: %r (source=%s)", text, source)
+        clean = intents.strip_wake(text).strip()
+        cmd = clean if clean else text.strip()
+        if cmd:
+            self.on_command(cmd, source)
         else:
             self.hub.set_state("idle")
 
@@ -115,7 +117,7 @@ class SpeechController:
         self.hub.set_state("listening")
         self.hub.status(mic_live=True)
         try:
-            audio = self.recorder.record(max_seconds=20.0, silence_seconds=1.5, wait_timeout=6.0, stop_flag=self._ptt_stop)
+            audio = self.recorder.record(max_seconds=30.0, silence_seconds=2.2, wait_timeout=6.0, stop_flag=self._ptt_stop)
             self.hub.status(mic_live=False)
             if audio.size < RATE * 0.4:
                 self.hub.toast("I didn't hear anything.")

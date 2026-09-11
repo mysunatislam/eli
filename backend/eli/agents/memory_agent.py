@@ -537,3 +537,70 @@ class MemoryAgent:
         return {"memories": n_mem, "conversation_lines": n_conv, "tasks": n_task, "entities": n_ent, "edges": n_edge,
                 "photos": n_wf, "jobs": n_jobs, "embedder": self.embedder.name, "sqlite_vec": self.vec_ok, "key_source": self.key_source,
                 "db": str(self.db_path)}
+
+    def rag_context(self, query: str, project: str = "", limit_memories: int = 5) -> dict:
+        """Retrieval-Augmented Generation context: combines vector memory search,
+        user preferences, past problem solutions, and knowledge graph project context."""
+        if self.private:
+            return {"preferences": [], "solutions": [], "facts": [], "project": None, "formatted": ""}
+
+        # 1. User preferences (always prioritized for personalized alignment)
+        prefs = self.preferences(limit=4)
+        pref_texts = [p.content for p in prefs]
+
+        # 2. Query-specific vector memories
+        recalled = self.recall(query, k=limit_memories, min_score=0.25)
+        solutions = [m.content for m in recalled if m.kind == "solution"]
+        facts = [m.content for m in recalled if m.kind in ("fact", "preference", "episode", "task") and m.content not in pref_texts]
+
+        if not solutions:
+            recent_solutions = [m.content for m in self.recent(limit=4) if m.kind == "solution"]
+            solutions.extend(recent_solutions[:2])
+
+        # 3. Knowledge graph project context
+        proj_data = None
+        proj_name = project
+        if not proj_name:
+            for ent in self.entities(kind="project")[:10]:
+                if ent.name.lower() in query.lower():
+                    proj_name = ent.name
+                    break
+
+        if proj_name:
+            proj_data = self.bundle(proj_name)
+
+        # 4. Formatted prompt string for injection
+        sections = []
+        if pref_texts:
+            sections.append("User Preferences:\n" + "\n".join(f"- {p}" for p in pref_texts))
+        if solutions:
+            sections.append("Past Verified Solutions / Fixes:\n" + "\n".join(f"- {s}" for s in solutions))
+        if facts:
+            sections.append("Relevant Context & Knowledge:\n" + "\n".join(f"- {f}" for f in facts[:4]))
+        if proj_data and proj_data.get("found"):
+            proj_info = [f"Project: {proj_data.get('name')}"]
+            if proj_data.get("folders"):
+                proj_info.append("Folders: " + ", ".join(proj_data["folders"]))
+            if proj_data.get("tools"):
+                proj_info.append("Tools: " + ", ".join(proj_data["tools"]))
+            if proj_data.get("notes"):
+                proj_info.append("Notes: " + proj_data["notes"])
+            sections.append("Project Knowledge:\n" + "\n".join(f"- {i}" for i in proj_info))
+
+        formatted = "\n\n".join(sections)
+        return {
+            "preferences": pref_texts,
+            "solutions": solutions,
+            "facts": facts,
+            "project": proj_data,
+            "formatted": formatted
+        }
+
+    def store_solution(self, goal: str, solution_summary: str, tools_used: list[str] = None) -> int:
+        """Stores a verified resolution into memory with high importance so future tasks can recall it."""
+        if self.private:
+            return 0
+        tools_str = f" (using {', '.join(tools_used)})" if tools_used else ""
+        content = f"Solution for '{goal}': {solution_summary}{tools_str}"
+        return self.remember(content, kind="solution", importance=0.85)
+

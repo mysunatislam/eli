@@ -42,11 +42,25 @@ AUTOMATION_TOOLS = [
     _t("set_clipboard", "Put text on the clipboard, e.g. corrected code for the user to paste.", {"text": {"type": "string"}}, ["text"]),
     _t("run_command", "Run a shell command on the user's PC and return its output. ALWAYS requires the user's confirmation; "
        "prefer other tools.", {"command": {"type": "string"}, "cwd": {"type": "string"}}, ["command"]),
+    _t("move_mouse", "Move the mouse cursor smoothly across the screen to (x, y) coordinates.",
+       {"x": {"type": "number"}, "y": {"type": "number"}}, ["x", "y"]),
     _t("wait", "Pause for up to 5 seconds (e.g. after opening an app).", {"seconds": {"type": "number"}}, ["seconds"]),
+    _t("play_youtube", "Search and play music or a video on YouTube with background automated skipping of ads.",
+       {"query": {"type": "string"}}, ["query"]),
+    _t("auto_allow_antigravity", "Start or stop watching for Antigravity permission prompts to automatically click Allow/Submit.",
+       {"enabled": {"type": "boolean"}}, ["enabled"]),
+    _t("dismiss_interferences", "Dismiss any stuck modal file dialogs (Create File, Save As) or popups on screen by sending Escape or closing the dialog window.", {}),
 ]
 
 # --- Coding agent --------------------------------------------------------------------------------------
 CODING_TOOLS = [
+    _t("create_code_script", "Create a complete, verified code script (Python, MATLAB, C++, JavaScript), save it directly to disk in the user's workspace/projects folder, verify syntax offline with AST, test-run it, and open it directly in VS Code so it is immediately active in an editor tab.",
+       {"filename": {"type": "string", "description": "e.g. 'hello_world.py' or 'data_pipeline.py'"},
+        "code": {"type": "string", "description": "The complete source code"},
+        "language": {"type": "string", "enum": ["python", "matlab", "javascript", "cpp", "c"], "description": "Script language, defaults to python"},
+        "folder": {"type": "string", "description": "Optional destination folder path"},
+        "run_after": {"type": "boolean", "description": "Whether to test-run the script with python and verify execution output"}},
+       ["filename", "code"]),
     _t("find_files", "Search the user's project folders (Documents, Desktop, Downloads, recent VS Code workspaces) for files or "
        "folders whose name contains all the given words. Newest first.", {"query": {"type": "string"}}, ["query"]),
     _t("read_file", "Read a text file (with line numbers). Optional line range.",
@@ -57,6 +71,12 @@ CODING_TOOLS = [
     _t("git_info", "git status, diff --stat and recent commits for the repository containing a path.", {"path": {"type": "string"}}, ["path"]),
     _t("run_tests", "Run the project's test or build command (e.g. 'pytest -q', 'npm test', 'python main.py') in a folder and return "
        "the output. Requires the user's confirmation. Use it to verify a fix.", {"command": {"type": "string"}, "cwd": {"type": "string"}}, ["command"]),
+    _t("open_ide", "Launch an IDE (VS Code or MATLAB) optionally opening a workspace folder or project path.",
+       {"ide": {"type": "string", "enum": ["vscode", "matlab"]}, "path": {"type": "string"}}, ["ide"]),
+    _t("check_code_errors", "Run offline static syntax and error analysis on a Python (.py), MATLAB (.m), C, or C++ file.",
+       {"path": {"type": "string"}}, ["path"]),
+    _t("scan_project_errors", "Scan an entire project folder offline for syntax and structural errors in Python, MATLAB, C, and C++ files.",
+       {"folder": {"type": "string"}}, []),
 ]
 
 # --- Design agent ---------------------------------------------------------------------------------------
@@ -124,6 +144,11 @@ MEMORY_TOOLS = [
         "tools": {"type": "array", "items": {"type": "string"}}}, ["name"]),
     _t("open_project", "Look up a project in the knowledge graph (files, folders, notes, related memories and past conversations) and "
        "open its main folder. If unknown, falls back to searching project folders by name.", {"name": {"type": "string"}}, ["name"]),
+    _t("query_rag", "Perform a comprehensive RAG search across personal memory, past verified solutions, user preferences, and the project knowledge graph.",
+       {"query": {"type": "string"}, "project": {"type": "string"}}, ["query"]),
+    _t("verify_action", "Explicitly verify the empirical result of an action (e.g. check if a window is open, file syntax is clean, or tests pass).",
+       {"target": {"type": "string", "description": "What to verify: an app name, window title, file path, or command output"},
+        "kind": {"type": "string", "enum": ["window", "file_syntax", "file_exists", "test"]}}, ["target", "kind"]),
 ]
 
 TOOLS: list[dict] = VISION_TOOLS + AUTOMATION_TOOLS + CODING_TOOLS + DESIGN_TOOLS + COMMUNICATION_TOOLS + MEMORY_TOOLS
@@ -133,6 +158,10 @@ HIGH_RISK_TOOLS = {"run_command", "run_tests", "write_file", "blender_run_python
 
 def describe_action(name: str, args: dict) -> str:
     a = args or {}
+    if name == "query_rag":
+        return f"search RAG memory for: {a.get('query', '')}"
+    if name == "verify_action":
+        return f"verify {a.get('kind', '')} on {a.get('target', '')}"
     if name == "run_command":
         return f"run the command: {a.get('command', '')}"
     if name == "run_tests":
@@ -149,6 +178,8 @@ def describe_action(name: str, args: dict) -> str:
         return f"click \"{a.get('text', '')}\""
     if name == "click":
         return f"click at ({a.get('x')}, {a.get('y')})"
+    if name == "move_mouse":
+        return f"move mouse to ({a.get('x')}, {a.get('y')})"
     if name == "open_app":
         return f"open {a.get('name', '')}"
     if name == "open_url":
@@ -203,6 +234,20 @@ def describe_action(name: str, args: dict) -> str:
         return f"git status of {a.get('path', '')}"
     if name == "save_workflow":
         return f"save workflow {a.get('name', '')}"
+    if name == "play_youtube":
+        return f"play \"{a.get('query', '')}\" on YouTube (auto ad-skip active)"
+    if name == "auto_allow_antigravity":
+        return "enable Antigravity auto-allow" if a.get("enabled") else "disable Antigravity auto-allow"
+    if name == "open_ide":
+        return f"open {a.get('ide', 'IDE')} on {a.get('path', 'workspace')}"
+    if name == "check_code_errors":
+        return f"check errors in {a.get('path', '')}"
+    if name == "scan_project_errors":
+        return f"scan project folder {a.get('folder', '')} for code errors"
+    if name == "create_code_script":
+        return f"create and open script '{a.get('filename', '')}' in VS Code"
+    if name == "dismiss_interferences":
+        return "dismiss modal dialogs and interferences"
     if name == "scroll":
         return f"scroll {a.get('amount')}"
     return name.replace("_", " ")

@@ -43,7 +43,23 @@ WHISPER_MODEL = os.getenv("ELI_WHISPER_MODEL", "base.en")
 TTS_RATE = int(os.getenv("ELI_TTS_RATE", "185"))
 TTS_VOICE = os.getenv("ELI_TTS_VOICE", "")
 TTS_ENGINE = os.getenv("ELI_TTS_ENGINE", "auto")   # auto | neural (Edge neural female voice, online) | sapi (offline)
-WAKE_WORDS = ("hey eli", "hey ellie", "hey elly", "hey ely", "hey ali", "ellie", "elly", "eli")
+WAKE_WORDS = (
+    "hey eli", "hey ellie", "hey elli", "hey elly", "hey ely", "hey ali", "hey allie",
+    "hello eli", "hello ellie", "hello elli", "hello elly", "hello ely", "hello ali", "hello allie",
+    "hi eli", "hi ellie", "hi elli", "hi elly", "hi ely", "hi ali", "hi allie",
+    "ellie", "elli", "elly", "eli", "allie", "ali", "ally",
+    "hey elliiii", "hello elliiii", "hi elliiii", "elliiii", "elliii", "ellii",
+    "hey iliiiii", "hello iliiiii", "hi iliiiii", "iliiiii",
+    "hey iliiii", "hello iliiii", "hi iliiii", "iliiii",
+    "hey iliii", "hello iliii", "hi iliii", "iliii",
+    "hey ilii", "hello ilii", "hi ilii", "ilii",
+    "hey ili", "hello ili", "hi ili", "ili", "ilee", "ileee",
+    "eliiiiee", "eliiiie", "eliiie", "eliee", "eliii", "eliiii", "eliiiii",
+    "hey eliiiiee", "hello eliiiiee", "hi eliiiiee",
+    "hey ilai", "hello ilai", "hi ilai", "ilai", "alai", "elai", "ilay", "alay", "ilaii",
+    "hili", "hilii", "hiliii", "hilee", "heli", "helli",
+    "i lie", "i lay", "hey i lie", "hello i lie"
+)
 
 # Extra project folders for the coding agent (semicolon separated)
 PROJECT_DIRS = [p for p in os.getenv("ELI_PROJECT_DIRS", "").split(";") if p.strip()]
@@ -51,7 +67,7 @@ PROJECT_DIRS = [p for p in os.getenv("ELI_PROJECT_DIRS", "").split(";") if p.str
 DEFAULT_SETTINGS = {
     "observe_enabled": False,      # continuous screen capture (needs screen_permission == granted)
     "screen_permission": "ask",    # ask | granted | denied
-    "wake_enabled": False,         # always-listening "Hey Eli"
+    "wake_enabled": True,          # always-listening "Hey Eli" / "Iliiii"
     "voice_replies": True,         # speak replies aloud
     "private_mode": False,         # no capture, no memory writes, no cloud calls with screen content
     "automation_enabled": True,    # kill switch for mouse/keyboard control
@@ -60,6 +76,7 @@ DEFAULT_SETTINGS = {
     "follow_cursor": True,         # the heart trails the mouse pointer across the screen
     "trust_mode": False,           # auto-approve confirmations (shell, tests, file writes, sends)
     "trust_until": 0,              # unix time; 0 = until switched off. Voice-granted trust expires after 30 min
+    "auto_allow_antigravity": True,# automatically click Allow/Submit on Antigravity prompts
     "blocked_apps": ["password", "1password", "bitwarden", "keepass", "lastpass", "bank", "banking", "wallet", "authenticator"],
     "camera_enabled": False,       # the desktop never opens a camera; phone photos are explicit uploads
     "save_frames": False,          # screenshots stay in RAM unless the user opts in

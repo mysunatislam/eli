@@ -226,24 +226,24 @@ class GeminiProvider:
                 out.append(T.Content(role="user" if t["role"] == "user" else "model", parts=parts))
         return out
 
-    FALLBACK_MODELS = ("gemini-3.6-flash", "gemini-3.5-flash", "gemini-flash-latest", "gemini-2.5-flash")
+    FALLBACK_MODELS = ("gemini-3-flash-preview", "gemini-3.1-flash-lite-preview", "gemini-3.6-flash", "gemini-flash-latest")
 
     async def complete(self, system: tuple[str, str], turns: list[dict], tools: list[dict], on_text: OnText = None) -> LLMResponse:
         try:
             return await self._complete(system, turns, tools, on_text)
         except Exception as e:
             s = str(e).lower()
-            if "not_found" in s or "no longer available" in s or "not found" in s:
+            if any(k in s for k in ("not_found", "no longer available", "not found", "429", "quota", "resource_exhausted", "service unavailable", "503")):
                 for alt in self.FALLBACK_MODELS:
                     if alt == self.model:
                         continue
-                    log.warning("model %s unavailable (%s); trying %s", self.model, str(e)[:120], alt)
+                    log.warning("model %s unavailable or quota reached (%s); trying fallback model %s", self.model, str(e)[:120], alt)
                     self.model = alt
                     try:
                         return await self._complete(system, turns, tools, on_text)
                     except Exception as e2:
                         s2 = str(e2).lower()
-                        if "not_found" in s2 or "not found" in s2 or "no longer available" in s2:
+                        if any(k in s2 for k in ("not_found", "no longer available", "not found", "429", "quota", "resource_exhausted", "service unavailable", "503")):
                             continue
                         raise
             raise
@@ -252,7 +252,7 @@ class GeminiProvider:
         T = self.T
         config = T.GenerateContentConfig(
             system_instruction="\n\n".join(s for s in system if s),
-            temperature=0.4,
+            temperature=0.2,
             tools=self._tools(tools) if tools else None,
             automatic_function_calling=T.AutomaticFunctionCallingConfig(disable=True),
         )

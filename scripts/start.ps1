@@ -6,10 +6,24 @@ param([switch]$Hidden)
 $root = Split-Path -Parent $PSScriptRoot
 $backend = Join-Path $root "backend"
 $desktop = Join-Path $root "desktop"
+$electronInstalled = "E:\Eli\Eli.exe"
+$electronDev = Join-Path $desktop "node_modules\electron\dist\electron.exe"
+
+if (Test-Path $electronInstalled) {
+  # Installed packaged app manages its own bundled Python backend and lifecycle
+  Start-Process -FilePath $electronInstalled -WorkingDirectory "E:\Eli"
+  if (-not $Hidden) { Write-Host "Eli is starting: look for the heart at the bottom-right. Ctrl+Shift+E opens the panel." -ForegroundColor Green }
+  exit 0
+}
+
+# Development mode
 $py = Join-Path $backend ".venv\Scripts\python.exe"
-$electron = Join-Path $desktop "node_modules\electron\dist\electron.exe"
+$electron = $electronDev
+$electronArgs = @(".")
+$electronCwd = $desktop
+
 if (-not (Test-Path $py)) { Write-Host "Run scripts\install.ps1 first (backend\.venv is missing)." -ForegroundColor Red; exit 1 }
-if (-not (Test-Path $electron)) { Write-Host "Run scripts\install.ps1 first (desktop\node_modules is missing)." -ForegroundColor Red; exit 1 }
+if (-not (Test-Path $electron)) { Write-Host "Neither Eli.exe nor desktop\node_modules\electron was found." -ForegroundColor Red; exit 1 }
 
 $port = 8790
 $envFile = Join-Path $backend ".env"
@@ -23,12 +37,8 @@ function Backend-Up {
 if (-not (Backend-Up)) {
   $logDir = Join-Path $backend "data"
   New-Item -ItemType Directory -Force $logDir | Out-Null
-  if ($Hidden) {
-    Start-Process -FilePath $py -ArgumentList "run.py" -WorkingDirectory $backend -WindowStyle Hidden `
-      -RedirectStandardOutput (Join-Path $logDir "server.log") -RedirectStandardError (Join-Path $logDir "server.err.log")
-  } else {
-    Start-Process -FilePath $py -ArgumentList "run.py" -WorkingDirectory $backend -WindowStyle Minimized
-  }
+  $winStyle = if ($Hidden) { "Hidden" } else { "Minimized" }
+  Start-Process -FilePath $py -ArgumentList "run.py" -WorkingDirectory $backend -WindowStyle $winStyle
   $ok = $false
   for ($i = 0; $i -lt 60; $i++) { if (Backend-Up) { $ok = $true; break }; Start-Sleep -Milliseconds 500 }
   if (-not $ok) { Write-Host "Backend did not come up on port $port. See backend\data\server.log." -ForegroundColor Yellow }

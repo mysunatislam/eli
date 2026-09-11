@@ -299,10 +299,17 @@ async def handle_message(msg: dict, source: str) -> None:
         broker.resolve(str(msg.get("id", "")), bool(msg.get("allow")))
     elif t == "nudge_action":
         asyncio.create_task(agent.nudge_action(str(msg.get("id", "")), str(msg.get("action", "no"))))
-    elif t == "stop_speaking":
+    elif t in ("stop", "stop_task", "cancel_task", "stop_speaking"):
+        agent._abort_requested = True
         if speech:
             speech.stop_speaking()
+        settings.set("auto_allow_antigravity", False)
+        auto.stop_auto_allow()
+        auto.stop_or_pause_media()
+        if scheduler:
+            scheduler.cancel_all()
         hub.set_state("idle")
+        hub.toast("Stopped immediately.")
     elif t == "forget_all":
         n = memory.forget(everything=True)
         hub.toast(f"Deleted {n} memories, the knowledge graph and the conversation log.")

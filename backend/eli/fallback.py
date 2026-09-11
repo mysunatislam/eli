@@ -74,6 +74,39 @@ def diagnose(snippet: str) -> str:
     return loc + "I can see an error but don't recognise the pattern. Read the last line of the message: it names the exception, and the line above it is where it happened."
 
 
+def curriculum_3d_modeling() -> str:
+    return (
+        "Here is the complete step-by-step roadmap to learn 3D modeling from scratch:\n\n"
+        "1. Understand the Foundations (Mental Model):\n"
+        "   - Geometry Elements: Vertices (points), Edges (lines), Faces (polygons).\n"
+        "   - Coordinate Space: X (width/red), Y (depth/green), Z (height/blue).\n"
+        "   - Mesh vs CAD: Polygonal meshes (Blender) are built from surface facets for organic shapes and visuals; Parametric CAD (Fusion 360/FreeCAD) uses exact mathematical curves and sketches for real-world engineering.\n\n"
+        "2. Choose Your Primary Tool:\n"
+        "   - For CGI, Game Assets, Animation & Organic Sculpting: Download Blender (free, open source).\n"
+        "   - For Precision Parts, Engineering, Functional 3D Printing: Use Autodesk Fusion 360 (free personal tier) or FreeCAD.\n\n"
+        "3. Master the 5 Core Modeling Tools (The 80/20 Rule):\n"
+        "   - Extrude (E): Pulls new faces outward or pushes them inward.\n"
+        "   - Inset (I): Creates an interior offset face inside the selection.\n"
+        "   - Bevel (Ctrl+B): Rounds or chamfers sharp edges to catch realistic light highlights.\n"
+        "   - Loop Cut (Ctrl+R): Adds edge loops to define form and support curves.\n"
+        "   - Knife tool / Boolean: Cuts custom geometry or performs unions/differences.\n\n"
+        "4. Learn Clean Topology (The Professional Standard):\n"
+        "   - Aim for all-quads (4-sided polygons). Avoid N-gons (5+ sides) and minimize triangles on curved surfaces.\n"
+        "   - Watch your Normals: Ensure face normals always point outward (Shift+N in Blender).\n"
+        "   - Watertightness: For 3D printing, ensure zero non-manifold edges or holes.\n\n"
+        "5. Materials, Lighting & Camera:\n"
+        "   - PBR Shading: Base Color, Roughness (shine vs matte), and Metallic.\n"
+        "   - 3-Point Lighting: Key light (primary), Fill light (softens shadows), Rim/Back light (separates object from background).\n\n"
+        "6. Practical Milestone Projects:\n"
+        "   - Project 1: Ceramic Coffee Mug (learn cylinders, extruding handles, beveling lips, subdivision surface).\n"
+        "   - Project 2: Snap-fit Electronics Enclosure (learn exact dimensions, tolerances of 0.2-0.4mm, screw bosses, draft angles).\n"
+        "   - Project 3: Sci-Fi Crate or Weapon Prop (learn hard-surface modeling, booleans, edge beveling, and texture mapping).\n\n"
+        "7. Exporting & Manufacturing:\n"
+        "   - 3D Printing: Export STL or 3MF -> Slice in Bambu Studio / Cura / PrusaSlicer.\n"
+        "   - Games & Web: Export GLTF/GLB or FBX with packed textures."
+    )
+
+
 class FallbackResponder:
     def __init__(self, vision, memory, auto, llm, broker):
         self.vision = vision
@@ -83,6 +116,9 @@ class FallbackResponder:
         self.broker = broker
 
     async def respond(self, text: str) -> str:
+        low = text.lower()
+        if any(k in low for k in ("3d model", "3d design", "learn 3d", "learn blender", "steps to learn 3d")):
+            return curriculum_3d_modeling()
         if intents.wants_screen(text):
             ok = await self.broker.ensure_screen("Eli needs to capture the screen once to answer your question.")
             if not ok:

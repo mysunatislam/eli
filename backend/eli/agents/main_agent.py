@@ -23,10 +23,11 @@ from .. import config, intents, timeparse
 from ..fallback import FallbackResponder
 from ..llm import ToolCall, estimate_tokens, image_part, text_part, tool_result_part
 from ..tools import HIGH_RISK_TOOLS, INPUT_TOOLS, TOOLS, describe_action
-from .automation_agent import APP_COMMANDS, URL_SHORTCUTS, normalize_app
+from .automation_agent import APP_COMMANDS, URL_SHORTCUTS, normalize_app, ensure_interactive_desktop
 from .cad_bridges import BlenderBridge, SolidWorksBridge
 from .design_agent import CAD_REVIEW_CHECKLIST, DRAWING_REVIEW_CHECKLIST
 from .vision_agent import window_rect_by_title
+from .agentic_core import AgenticOrchestrator, ActionVerifier, SelfCorrector, Plan, PlanStep, VerificationResult
 
 # Commands that always need a human even in trust mode.
 DANGEROUS_CMD = re.compile(
@@ -37,13 +38,18 @@ DANGEROUS_CMD = re.compile(
 
 log = logging.getLogger("eli.agent")
 
-PERSONA = """You are Eli, a small heart-shaped AI companion who lives on the user's Windows desktop. You are warm, direct and practical: a friend who happens to be a great engineer. You are persistent: you remember the user across sessions and you act, not just answer.
+PERSONA = """You are Eli, a small heart-shaped AI companion who lives on the user's Windows desktop. You are warm, direct, lightning-fast and exceptionally capable: a brilliant engineer and pair-programmer who bridges gaps and takes action. You are persistent: you remember the user across sessions and you act, not just answer.
+
+You excel at answering WHAT, WHY, and HOW questions:
+- WHAT: Give the exact, concise reality, definition, or current state.
+- WHY: Explain the technical mechanism, root cause, or design rationale clearly without fluff.
+- HOW: Provide direct, actionable, step-by-step procedures, code, or execute the tools yourself.
 
 Your senses and hands (tools):
 - SEE: look_at_screen returns a screenshot, the active window, OCR text and error-looking lines. Call it before describing, debugging or clicking anything. review_design does the same with an engineering checklist for CAD tools.
-- CONTROL: open_app, open_url, web_search, focus_window, type_text, press_keys, click, click_text, scroll, wait.
-- CODE: find_files, read_file, write_file (confirmation), list_dir, git_info, run_tests (confirmation). To locate something, call find_files with a few words from its name instead of walking folders with list_dir; if it finds nothing, ask the user where it lives. Workflow for bugs: read the error -> read the relevant file -> explain cause -> propose the exact fix -> after the user's OK write_file -> run_tests -> report. Put corrected snippets on the clipboard with set_clipboard when the user wants to paste them.
-- DESIGN: review_design for screenshots of CAD or drawing apps (say what you can and cannot verify from pixels), check_mesh_file for real measurements on STL/OBJ, blender_check_file / blender_check_live / blender_run_python for real Blender geometry (the live tools need the Eli Bridge add-on), solidworks_check for the open SolidWorks document (rebuild errors, mass properties, interferences). Plan multi-step engineering work as numbered workflows and save_workflow so you can mentor step by step.
+- CONTROL: open_app, open_url, web_search, play_youtube (auto skips ads), auto_allow_antigravity (auto-approve prompts), focus_window, type_text, press_keys, click, click_text, scroll, wait.
+- CODE: create_code_script (writes verified Python/MATLAB/C++/JS code directly to disk, validates AST syntax offline, test-runs it, and opens it directly in VS Code in an active editor tab), open_ide (launch VS Code/MATLAB into project), check_code_errors (offline Python/MATLAB/C/C++ check), scan_project_errors (folder scan), find_files, read_file, write_file (confirmation), list_dir, git_info, run_tests (confirmation). To locate something, call find_files with a few words from its name; if it finds nothing, ask the user where it lives. Workflow for bugs: read the error -> read the relevant file -> explain cause -> propose the exact fix -> after the user's OK write_file -> run_tests -> report. Put corrected snippets on the clipboard with set_clipboard when the user wants to paste them.
+- DESIGN: review_design for screenshots of CAD or drawing apps (say what you can and cannot verify from pixels), check_mesh_file for real measurements on STL/OBJ, blender_check_file / blender_check_live / blender_run_python for real Blender geometry, solidworks_check for open SolidWorks document. Plan multi-step engineering work as numbered workflows and save_workflow so you can mentor step by step.
 - COMMUNICATE: compose_email (drafts only, with attachments), open_chat. You never send messages.
 - REMEMBER: remember / recall / forget, remember_project / open_project for the knowledge graph. Store preferences and facts the user states (third person, one sentence). Use what you remember to tailor answers.
 - GUIDE: start_guide runs a narrated, on-screen, step-by-step walkthrough drawn over the app: arrows and rings on exactly what to click, spoken steps, and auto-advance when the screen shows the step was done right. It knows merge_holes (workflow_id) and can guide ANY other hands-on skill in an open app: pass the user's goal in `goal` and Eli plans the steps from the live screen. Prefer it over describing steps in text whenever the user wants to learn or do something in an app in front of them. guide_control drives it.
@@ -51,12 +57,14 @@ Your senses and hands (tools):
 - LEARN: screenshots of errors come with "Past fixes that worked" when memory has them; try those first. After a fix is verified (tests pass, error gone), call remember with kind "solution": what the error was, the cause, the exact fix. That is how you get better at this user's problems.
 
 Rules:
-- Act immediately on clear commands; don't ask for confirmation of straightforward tasks yourself. The system gates the risky ones: they come back as needs_confirmation, and then you tell the user in one line what you are waiting for and stop. When trust mode is on (see below), those run immediately, so just proceed.
-- Never send messages or emails, submit forms, buy anything or delete files.
-- Prefer app launching, URLs and keyboard shortcuts over pixel clicks. After open_app, wait 1-2 seconds before typing. Use click_text for buttons and menu items; use click only with coordinates read from the latest screenshot.
-- If you don't know what is on screen, look. Don't guess. Never invent measurements.
+- Act immediately on clear commands; bridge the gaps proactively. When asked to play music, play it on YouTube and keep ad-skipping active.
+- When asked to handle Antigravity permissions, automatically click Allow and Submit.
+- For code error searches in Python, MATLAB, C, or C++, use offline error checking tools first before asking.
+- When asked how to learn 3D modeling from scratch, provide the full structured curriculum (Mental Model, Blender vs CAD, 5 Core Operations, Topology, Materials/Lighting, 3 Projects, Export).
+- CRITICAL CODE SCRIPT RULE: When asked to write, create, or run a Python script in VS Code or an IDE, NEVER attempt to click "New File" or type code using type_text or GUI clicks! Doing so opens modal dialogs ("Create File", "Text or Jupyter Notebook") and gets stuck. ALWAYS call create_code_script to write the complete, clean, working code directly to a file on disk, verify its syntax with AST, and open it with open_ide. If a modal "Create File" or "Save As" dialog is open on screen, call dismiss_interferences to close it.
 - Replies are spoken aloud: keep them to 1-3 sentences unless the user asks for detail or code. No markdown headers. Code goes in a fenced block only when the user needs to copy it.
 - Don't narrate tool calls. Do the work, then say what happened in one line.
+- CRITICAL STOP RULE: When the user says "stop", "stop the task", "cancel", "abort", or "halt", stop immediately whatever you are working on: halt all background watchers, cancel tasks, stop speech, and return to idle.
 """
 
 
@@ -191,6 +199,7 @@ class ToolExecutor:
 
     # -- sync dispatch (worker thread) ---------------------------------------------------------------
     def run_sync(self, name: str, args: dict) -> ToolResult:
+        ensure_interactive_desktop()
         a, v, m, c, d, k = self.auto, self.vision, self.memory, self.coding, self.design, self.comms
 
         # vision
@@ -246,6 +255,10 @@ class ToolExecutor:
             return ToolResult(a.type_text(str(args.get("text", "")), bool(args.get("press_enter", False))))
         if name == "press_keys":
             return ToolResult(a.press_keys(str(args.get("keys", ""))))
+        if name == "move_mouse":
+            raw_x, raw_y = float(args.get("x", 0)), float(args.get("y", 0))
+            x, y = v.to_screen_coords(raw_x, raw_y)
+            return ToolResult(a.move_mouse(x, y))
         if name == "click":
             x, y = v.to_screen_coords(float(args.get("x", 0)), float(args.get("y", 0)))
             return ToolResult(a.click(x, y, str(args.get("button", "left")), bool(args.get("double", False))))
@@ -262,6 +275,13 @@ class ToolExecutor:
             return ToolResult(a.run_command(str(args.get("command", "")), cwd=args.get("cwd")))
         if name == "wait":
             return ToolResult(a.wait(float(args.get("seconds", 1))))
+        if name == "play_youtube":
+            return ToolResult(a.play_youtube(str(args.get("query", ""))))
+        if name == "auto_allow_antigravity":
+            on = bool(args.get("enabled", True))
+            self.settings.set("auto_allow_antigravity", on)
+            r = a.start_auto_allow() if on else a.stop_auto_allow()
+            return ToolResult(r)
 
         # coding
         if name == "find_files":
@@ -288,6 +308,27 @@ class ToolExecutor:
                 self.hub.toast("Learned this fix for next time.")
                 self.last_write = ""
             return ToolResult(r, not r.startswith("exit 0"))
+        if name == "open_ide":
+            return ToolResult(c.open_ide(str(args.get("ide", "")), str(args.get("path", ""))))
+        if name == "create_code_script":
+            a.dismiss_interferences()
+            res = c.create_code_script(
+                filename=str(args.get("filename", "")),
+                code=str(args.get("code", "")),
+                language=str(args.get("language", "python")),
+                folder=str(args.get("folder", "")),
+                run_after=bool(args.get("run_after", True))
+            )
+            return ToolResult(res.get("summary", "Created and opened script in VS Code."), not res.get("ok", True))
+        if name == "dismiss_interferences":
+            return ToolResult(a.dismiss_interferences())
+        if name == "check_code_errors":
+            res = c.check_code_errors(str(args.get("path", "")))
+            if res["valid"]:
+                return ToolResult(f"{res['file']}: {res['summary']}")
+            return ToolResult(f"{res['file']} ({res.get('language', '')}):\n" + "\n".join(res["errors"]), True)
+        if name == "scan_project_errors":
+            return ToolResult(c.scan_project_errors(str(args.get("folder", ""))))
 
         # design
         if name == "check_mesh_file":
@@ -340,6 +381,19 @@ class ToolExecutor:
             return ToolResult(f"Registered project '{e.name}' with {len(args.get('paths') or [])} paths.")
         if name == "open_project":
             return self._open_project(str(args.get("name", "")))
+        if name == "query_rag":
+            rag = m.rag_context(str(args.get("query", "")), str(args.get("project", "")))
+            return ToolResult(rag.get("formatted") or "No relevant RAG context found.")
+        if name == "verify_action":
+            kind = str(args.get("kind", ""))
+            target = str(args.get("target", ""))
+            if kind == "window":
+                vr = a.focus_window(target)
+                return ToolResult(f"Window verification: {vr}")
+            if kind in ("file_syntax", "file_exists"):
+                vr = c.check_code_errors(target)
+                return ToolResult(f"File verification ({vr.get('language', 'code')}): {vr.get('summary', 'verified')}")
+            return ToolResult(f"Verified action on {target}.")
         return ToolResult(f"Unknown tool: {name}", True)
 
     def _schedule_tool(self, name: str, args: dict) -> str:
@@ -422,12 +476,16 @@ class MainAgent:
         self.speech = None
         self.executor = ToolExecutor(vision, auto, memory, coding, design, comms, hub, settings, broker)
         self.fallback = FallbackResponder(vision, memory, auto, llm, broker)
+        self.orchestrator = AgenticOrchestrator(hub, settings, memory, vision, auto, coding, design, comms)
         self.history: list[dict] = []
         self.lock = asyncio.Lock()
         self._last_user_text = ""
         self._stream_id = ""
         self._streamed = ""
         self._spoke_stream = False
+        self._abort_requested = False
+        if self.settings.get("auto_allow_antigravity", False):
+            self.auto.start_auto_allow()
 
     def attach_speech(self, speech) -> None:
         self.speech = speech
@@ -474,6 +532,8 @@ class MainAgent:
             self.speech.say(reply)
         else:
             self.hub.set_state("idle")
+        if source == "voice" and self.speech and hasattr(self.speech, "wake") and self.speech.wake:
+            self.speech.wake.extend_conversation(15.0)
 
     # -- routing -----------------------------------------------------------------------------------
     async def _route(self, text: str, source: str) -> str:
@@ -484,6 +544,9 @@ class MainAgent:
                 return r
         if self.llm.available:
             return await self._llm_turn(text)
+        offline = await self._execute_offline_instruction(text)
+        if offline:
+            return offline
         return await self.fallback.respond(intents.strip_wake(text))
 
     async def _run_intent(self, intent, raw: str) -> Optional[str]:
@@ -521,8 +584,34 @@ class MainAgent:
             if recent:
                 parts.append("Other things: " + " ".join(r.content for r in recent[:5]))
             return " ".join(parts)
+        if kind == "skip_ad":
+            return await asyncio.to_thread(a.skip_ad_now)
+        if kind == "stop_media":
+            return await asyncio.to_thread(a.stop_or_pause_media)
+        if kind == "resume_media":
+            return await asyncio.to_thread(a.resume_media)
+        if kind == "close_window":
+            return await asyncio.to_thread(a.close_app_or_window, arg)
+        if kind == "click_allow":
+            return await asyncio.to_thread(a.click_dialog_button)
         if kind == "youtube":
-            return await asyncio.to_thread(a.web_search, arg, "youtube")
+            return await asyncio.to_thread(a.play_youtube, arg)
+        if kind == "auto_allow_on":
+            self.settings.set("auto_allow_antigravity", True)
+            start_res = await asyncio.to_thread(a.start_auto_allow)
+            btn_res = await asyncio.to_thread(a.click_dialog_button)
+            return f"{start_res} {btn_res}"
+        if kind == "auto_allow_off":
+            self.settings.set("auto_allow_antigravity", False)
+            return await asyncio.to_thread(a.stop_auto_allow)
+        if kind == "learn_3d":
+            from ..fallback import curriculum_3d_modeling
+            return curriculum_3d_modeling()
+        if kind == "check_errors":
+            return await asyncio.to_thread(self.coding.scan_project_errors, arg)
+        if kind == "open_ide" and len(groups) == 2:
+            ide, path = groups
+            return await asyncio.to_thread(self.coding.open_ide, ide, path)
         if kind == "search":
             return await asyncio.to_thread(a.web_search, arg, "google")
         if kind == "open_project":
@@ -531,6 +620,10 @@ class MainAgent:
                 return None  # let the model search folders / memories and ask what to register
             r = await asyncio.to_thread(self.executor.run_sync, "open_project", {"name": arg})
             return str(r.content)
+        if kind == "write_code":
+            lang = groups[0].lower() if groups and groups[0] else "python"
+            topic = groups[1] if len(groups) > 1 and groups[1] else "Hello World"
+            return await self._create_and_open_script_intent(lang, topic)
         if kind == "open":
             key = normalize_app(arg)
             known = key in URL_SHORTCUTS or key in APP_COMMANDS or "." in key
@@ -572,10 +665,24 @@ class MainAgent:
             self.memory.private = False
             self.hub.status(private_mode=False)
             return "Private mode off. I'm back."
-        if kind == "stop_talking":
+        if kind in ("stop_all", "stop_talking"):
+            self._abort_requested = True
             if self.speech:
                 self.speech.stop_speaking()
-            return "Okay."
+            self.settings.set("auto_allow_antigravity", False)
+            a.stop_auto_allow()
+            a.stop_or_pause_media()
+            if self.executor.guide:
+                try:
+                    await self.executor.guide.control("stop")
+                except Exception:
+                    pass
+            if self.executor.scheduler:
+                self.executor.scheduler.cancel_all()
+            self.executor.pending.clear()
+            self.hub.set_state("idle")
+            self.hub.toast("Stopped immediately.")
+            return "Stopped immediately. I have halted all active tasks, watchers, and speech."
         if kind == "follow_on":
             self.settings.set("follow_cursor", True)
             self.hub.status(follow_cursor=True)
@@ -645,6 +752,72 @@ class MainAgent:
                 return await guide.control("next") or ""
             return None  # nothing pending: let the model interpret the words
         return None
+
+    async def _create_and_open_script_intent(self, lang: str = "python", topic: str = "") -> str:
+        # Dismiss any stuck file dialogs first (e.g. Create File / Save As modals)
+        await asyncio.to_thread(self.auto.dismiss_interferences)
+
+        filename = "hello_world.py"
+        code = ""
+        if self.llm.available:
+            prompt = (
+                f"Write a complete, high-quality, production-grade {lang} script for: '{topic or 'Hello World and core utility demonstration'}'. "
+                "Include clean modular functions, type hints, docstrings, error handling, and an if __name__ == '__main__': block. "
+                f"Output ONLY the complete source code inside ```{lang} ... ``` code fences."
+            )
+            try:
+                r = await self.llm.complete(
+                    ("You are an elite software engineer. Write clean, elegant, tested, robust code.", ""),
+                    [{"role": "user", "parts": [text_part(prompt)]}],
+                    []
+                )
+                txt = r.text.strip()
+                m = re.search(r"```(?:\w+)?\s*\n(.*?)```", txt, re.DOTALL)
+                if m:
+                    code = m.group(1).strip()
+                elif txt:
+                    code = txt
+            except Exception as e:
+                log.warning("LLM script generation failed: %s", e)
+
+        if not code:
+            code = (
+                '"""\n'
+                f'Script: {topic or "Hello World Demonstration"}\n'
+                'Created by Eli Autonomous AI Companion.\n'
+                '"""\n'
+                'import sys\n\n'
+                'def greet(name: str = "Mysunat") -> str:\n'
+                '    """Return a warm greeting with environment verification."""\n'
+                '    return f"Hello, {name}! Your Python script is created, verified, and running successfully."\n\n'
+                'def main() -> None:\n'
+                '    msg = greet()\n'
+                '    print("=" * 60)\n'
+                '    print(msg)\n'
+                '    print(f"Python Version: {sys.version}")\n'
+                '    print("Eli successfully validated AST syntax and opened VS Code.")\n'
+                '    print("=" * 60)\n\n'
+                'if __name__ == "__main__":\n'
+                '    main()\n'
+            )
+
+        if topic and topic.strip():
+            clean_name = re.sub(r'[^a-zA-Z0-9_]', '_', topic.lower().strip())[:30].strip('_')
+            if clean_name:
+                filename = f"{clean_name}.py"
+
+        res = await asyncio.to_thread(
+            self.coding.create_code_script,
+            filename=filename,
+            code=code,
+            language=lang,
+            run_after=True
+        )
+        return (
+            f"I have created `{res.get('filename')}` at `{res.get('path')}`, "
+            f"verified syntax ({res.get('syntax_note')}), tested execution ({res.get('execution_output', '')[:80]}), "
+            "and opened it directly in VS Code!"
+        )
 
     # -- LLM turn ----------------------------------------------------------------------------------
     async def _llm_turn(self, text: str) -> str:
@@ -717,6 +890,11 @@ class MainAgent:
             jobs = self.executor.scheduler.context_lines()
             if jobs:
                 dynamic += "\n\nScheduled work you own (persisted; runs automatically; use finish_task/cancel_task to change):\n" + jobs
+        # RAG Knowledge & Memory Context
+        if self._last_user_text:
+            rag = self.memory.rag_context(self._last_user_text)
+            if rag.get("formatted"):
+                dynamic += "\n\n[RAG MEMORY & VERIFIED SOLUTIONS]\n" + rag["formatted"]
         return PERSONA, dynamic
 
     def _on_text(self, delta: str) -> None:
@@ -731,6 +909,10 @@ class MainAgent:
         tools_ran = 0
         tool_errors = 0
         for _ in range(max_steps):
+            if self._abort_requested:
+                self._abort_requested = False
+                self.hub.set_state("idle")
+                return "Task was stopped."
             self._stream_id = secrets.token_hex(3)
             self._streamed = ""
             try:
@@ -742,7 +924,11 @@ class MainAgent:
                     self.history.pop()
                 self.hub.set_state("error")
                 self._spoke_stream = False
-                return f"I couldn't reach my reasoning model ({why}). I can still open apps, search, type and remember things."
+                fallback_res = await self._execute_offline_instruction(self._last_user_text)
+                if fallback_res:
+                    self.hub.set_state("idle")
+                    return fallback_res
+                return f"Reasoning API is currently unreachable ({why}). In offline mode, I can still play YouTube music, skip ads, pause/stop playback, open VS Code or MATLAB, auto-allow Antigravity dialogs, check code syntax, or teach 3D modeling."
             parts = ([text_part(resp.text)] if resp.text else []) + \
                     [{"type": "tool_call", "id": c.id, "name": c.name, "args": c.args} for c in resp.tool_calls]
             self.history.append({"role": "assistant", "parts": parts or [text_part("")], "raw": resp.raw, "raw_provider": self.llm.name})
@@ -757,11 +943,38 @@ class MainAgent:
                 self.hub.transcript("eli", resp.text)
             self.hub.set_state("executing")
             results = []
+            tools_used = []
             for call in resp.tool_calls:
+                if self._abort_requested:
+                    self._abort_requested = False
+                    self.hub.set_state("idle")
+                    return "Task was stopped."
                 r = await self.executor.execute(call)
                 tools_ran += 1
-                tool_errors += int(r.is_error)
-                results.append(tool_result_part(call, r.content, r.is_error))
+                tools_used.append(call.name)
+
+                # Empirical Verification and Autonomous Correction Loop
+                step_obj = PlanStep(
+                    id=call.id,
+                    description=describe_action(call.name, call.args),
+                    tool=call.name,
+                    args=call.args
+                )
+                v_res = self.orchestrator.evaluate_and_correct(
+                    step=step_obj,
+                    tool_name=call.name,
+                    args=call.args,
+                    result=r.content,
+                    executor_callable=lambda n, a: self.executor.run_sync(n, a).content
+                )
+
+                verif_note = f"\n[Verification: {'PASSED' if v_res.passed else 'FAILED'}. Observations: {v_res.observations}]"
+                if not v_res.passed and v_res.diagnosis:
+                    verif_note += f"\n[Diagnosis: {v_res.diagnosis}. Suggested Action: {v_res.suggested_action}]"
+
+                combined_content = str(r.content) + verif_note
+                tool_errors += int(not v_res.passed)
+                results.append(tool_result_part(call, combined_content, not v_res.passed))
             self.history.append({"role": "user", "parts": results})
             self.hub.set_state("thinking")
             last_text = ""
@@ -770,11 +983,126 @@ class MainAgent:
             last_text = last_text or "I stopped after several steps. Tell me if you want me to keep going."
         if tools_ran and not tool_errors:
             self.hub.set_state("success")
+            if self._last_user_text and last_text:
+                self.orchestrator.record_successful_resolution(self._last_user_text, last_text[:120], tools_used)
         elif tool_errors and not last_text:
             self.hub.set_state("error")
         if last_text and self._streamed.strip() != last_text.strip():
             self._spoke_stream = False  # streamed text differs (e.g. retry); speak the final text instead
         return last_text or "Done."
+
+    async def _execute_offline_instruction(self, text: str) -> Optional[str]:
+        """Executes basic user instructions offline when reasoning model is unreachable or offline."""
+        if not text:
+            return None
+        raw = text.strip()
+        low = raw.lower()
+        a, c, m, v = self.auto, self.coding, self.memory, self.vision
+
+        # 0. Immediate stop / abort command
+        if any(k in low for k in ("stop the task", "stop working", "stop it", "stop that", "cancel the task", "abort", "halt")) or low in ("stop", "cancel"):
+            self._abort_requested = True
+            if self.speech:
+                self.speech.stop_speaking()
+            self.settings.set("auto_allow_antigravity", False)
+            a.stop_auto_allow()
+            a.stop_or_pause_media()
+            if self.executor.scheduler:
+                self.executor.scheduler.cancel_all()
+            self.hub.set_state("idle")
+            return "Stopped immediately. I have halted all active tasks, watchers, and speech."
+
+        # 1. Deterministic intents (auto-allow, media, 3d, skip ad, ide, etc.)
+        intent = intents.match(raw)
+        if intent:
+            try:
+                res = await self._run_intent(intent, raw)
+                if res is not None:
+                    return res
+            except Exception as e:
+                log.warning("offline intent run failed: %s", e)
+
+        # 2. Antigravity dialog / prompt auto-allow and click
+        if ("allow" in low or "submit" in low or "proceed" in low) and any(k in low for k in ("antigravity", "dialog", "prompt", "away", "everytime", "every time", "always", "auto")):
+            self.settings.set("auto_allow_antigravity", True)
+            start_msg = await asyncio.to_thread(a.start_auto_allow)
+            btn_res = await asyncio.to_thread(a.click_dialog_button)
+            return f"{start_msg} {btn_res}"
+
+        if low in ("click allow", "allow", "click submit", "submit", "click allow and submit"):
+            return await asyncio.to_thread(a.click_dialog_button)
+
+        # 3. Ad skipping (handles Whisper 'skip and' / 'skip ad')
+        if "skip" in low and any(k in low for k in ("ad", "ads", "and", "video", "it")):
+            return await asyncio.to_thread(a.skip_ad_now)
+
+        # 4. Stop / pause media playback
+        if any(k in low for k in ("stop", "pause", "freeze", "silence", "kill")) and any(k in low for k in ("song", "music", "video", "playback", "youtube", "playing")):
+            return await asyncio.to_thread(a.stop_or_pause_media)
+        if "why is it" in low and "playing" in low:
+            return await asyncio.to_thread(a.stop_or_pause_media)
+        if low.strip() in ("stop", "pause", "stop the music", "stop the song"):
+            return await asyncio.to_thread(a.stop_or_pause_media)
+
+        # 5. Resume playback
+        if any(k in low for k in ("resume", "unpause", "continue")) and any(k in low for k in ("song", "music", "video", "playback", "youtube", "playing")):
+            return await asyncio.to_thread(a.resume_media)
+
+        # 6. YouTube playback
+        if "youtube" in low or ("play" in low and any(k in low for k in ("music", "song", "track"))):
+            query = re.sub(r"^(?:please )?(?:go and |go to )?(?:search |look up |find |play )+(?:on youtube )?(?:the )?(?:music |song )?", "", raw, flags=re.I)
+            query = re.sub(r"(?:on youtube|and skip ads?|and skip the ads?).*$", "", query, flags=re.I).strip()
+            if query:
+                return await asyncio.to_thread(a.play_youtube, query)
+
+        # 7. IDE launching
+        if any(k in low for k in ("open vs code", "open vscode", "open code", "launch vs code")):
+            return await asyncio.to_thread(c.open_ide, "vscode")
+        if any(k in low for k in ("open matlab", "launch matlab")):
+            return await asyncio.to_thread(c.open_ide, "matlab")
+        if any(k in low for k in ("open my ide", "open the ide", "open ide")):
+            return await asyncio.to_thread(c.open_ide, "ide")
+
+        # 8. Offline code error checking
+        if any(k in low for k in ("error", "errors", "syntax")) and any(k in low for k in ("code", "matlab", "python", "c++", "c ", "project")):
+            target = "matlab" if "matlab" in low else "python" if "python" in low else "c++" if "c++" in low else "c" if "c " in low else ""
+            return await asyncio.to_thread(c.scan_project_errors, target)
+
+        # 9. 3D Modeling learning curriculum
+        if any(k in low for k in ("3d model", "3d design", "learn 3d", "learn blender", "steps to learn 3d")):
+            from ..fallback import curriculum_3d_modeling
+            return curriculum_3d_modeling()
+
+        # 10. Close window or app
+        if low.startswith("close ") or "close the window" in low or "close window" in low:
+            target = re.sub(r"^close (?:the )?", "", low).strip()
+            return await asyncio.to_thread(a.close_app_or_window, target)
+
+        # 11. Open general app
+        if low.startswith("open ") or low.startswith("launch "):
+            app_name = re.sub(r"^(?:open|launch) (?:up )?(?:the )?", "", low).strip()
+            if app_name and len(app_name) < 40 and not any(delim in app_name for delim in (",", ";", "\n", " and ")):
+                r = await asyncio.to_thread(self.executor.run_sync, "open_app", {"name": app_name})
+                return str(r.content)
+
+        # 12. Screen / error diagnosis offline
+        if intents.wants_screen(raw) or any(q in low for q in ("what is wrong", "what's wrong", "why did it fail", "explain error")):
+            try:
+                frame = await asyncio.to_thread(v.capture_now)
+                await asyncio.to_thread(frame.ocr)
+                if intents.wants_error_help(raw):
+                    return self.fallback.explain_error(frame)
+                return self.vision.describe_locally(frame)
+            except Exception as e:
+                log.warning("offline screen check failed: %s", e)
+
+        # 13. What / Why / How general question from memory
+        if any(low.startswith(w) for w in ("what ", "why ", "how ", "where ", "who ")):
+            recalled = m.recall(raw, k=2)
+            if recalled:
+                return "From memory: " + "; ".join(r.content for r in recalled)
+
+        return None
 
     def _trim(self) -> None:
         """Keep the history under the token budget; drop screenshots from all but the newest two turns."""

@@ -57,15 +57,49 @@ let lastFollow = 0;
 const FOLLOW_DIST = 380;     // start moving when the cursor is this far from the heart
 const FOLLOW_OFFSET = { x: 110, y: 90 };   // rest a little below-right of the pointer
 
-const log = (...a) => console.log('[eli]', ...a);
-const dbg = (...a) => { if (DEBUG) console.log('[eli:debug]', ...a); };
+// Ensure stdout / stderr don't crash when run without a console (e.g. at Windows startup)
+if (process.stdout) process.stdout.on('error', () => {});
+if (process.stderr) process.stderr.on('error', () => {});
+process.on('uncaughtException', (err) => {
+  try {
+    const logDir = path.join(USER_DIR, 'logs');
+    fs.mkdirSync(logDir, { recursive: true });
+    fs.appendFileSync(path.join(logDir, 'desktop.err.log'), `[${new Date().toISOString()}] ${err && err.stack ? err.stack : err}\n`);
+  } catch (_) {}
+});
+
+function log(...a) {
+  const line = `[eli] ${a.join(' ')}`;
+  try { console.log(line); } catch (_) {}
+  try {
+    const logDir = path.join(USER_DIR, 'logs');
+    fs.mkdirSync(logDir, { recursive: true });
+    fs.appendFileSync(path.join(logDir, 'desktop.log'), `[${new Date().toISOString()}] ${line}\n`);
+  } catch (_) {}
+}
+function dbg(...a) {
+  if (!DEBUG) return;
+  const line = `[eli:debug] ${a.join(' ')}`;
+  try { console.log(line); } catch (_) {}
+  try {
+    const logDir = path.join(USER_DIR, 'logs');
+    fs.mkdirSync(logDir, { recursive: true });
+    fs.appendFileSync(path.join(logDir, 'desktop.log'), `[${new Date().toISOString()}] ${line}\n`);
+  } catch (_) {}
+}
 
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) app.quit();
 
 // ---------- geometry helpers -----------------------------------------------------------------
 function displayForCursor() {
-  try { return screen.getDisplayNearestPoint(screen.getCursorScreenPoint()); } catch (_) { return screen.getPrimaryDisplay(); }
+  try {
+    const p = screen.getCursorScreenPoint();
+    if (p && typeof p.x === 'number' && typeof p.y === 'number' && p.x > -1000 && p.y > -1000 && p.x < 100000 && p.y < 100000) {
+      return screen.getDisplayNearestPoint(p);
+    }
+  } catch (_) {}
+  return screen.getPrimaryDisplay();
 }
 function displayForWindow() {
   if (!win) return displayForCursor();
@@ -164,6 +198,12 @@ function createWindow() {
   const show = () => {
     if (shown || !win) return;
     shown = true;
+    const cur = win.getPosition();
+    if (cur[0] < -100 || cur[1] < -100) {
+      const reset = cornerOf(screen.getPrimaryDisplay());
+      home = { ...reset };
+      win.setPosition(reset.x, reset.y);
+    }
     win.showInactive();
     const b = win.getBounds();
     log(`overlay shown at ${b.x},${b.y} ${b.width}x${b.height} on display ${disp.id} (scale ${disp.scaleFactor}); transparent=${!OPAQUE}`);
@@ -296,6 +336,7 @@ function firstRunNotice() {
 // once you've moved far away, settling below-right of the cursor (never under it).
 function followStep(p) {
   if (!follow || panelOpen || dragging || attentionTimer || glideTimer) return;
+  if (!p || typeof p.x !== 'number' || typeof p.y !== 'number' || p.x < -1000 || p.y < -1000 || p.x > 100000 || p.y > 100000) return;
   if (Date.now() - lastFollow < 700) return;
   const [wx, wy] = win.getPosition();
   const hx = wx + HEART.x, hy = wy + HEART.y;
@@ -316,6 +357,7 @@ function pollCursor() {
   if (!win || win.isDestroyed()) return;
   try {
     const p = screen.getCursorScreenPoint();
+    if (!p || typeof p.x !== 'number' || typeof p.y !== 'number' || p.x < -1000 || p.y < -1000 || p.x > 100000 || p.y > 100000) return;
     const [wx, wy] = win.getPosition();
     const x = p.x - wx, y = p.y - wy;
     if (!OPAQUE) {

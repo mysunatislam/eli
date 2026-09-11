@@ -36,26 +36,38 @@ class Transcriber:
     def ready(self) -> bool:
         return self._model is not None
 
+    INITIAL_PROMPT = (
+        "Eli, Ellie, Elli, Ili, Ilii, Iliii, Iliiii, Iliiiii, Elii, Eliii, Ilai, Alai. "
+        "Hey Eli, Hey Ellie, Hey Elli, Hey Ili, Hey Iliiiii, Hello Ellie, Hello Elli, "
+        "Hi Ili, Hi Eli, Iliiii, Iliii, Ilii, Ili. Yes, Eli. Open VS Code, YouTube, Python, Bipolar disorder."
+    )
+
     def transcribe(self, audio: np.ndarray) -> str:
         self.load()
         if self._model is None or audio.size == 0:
             return ""
-        segments, _ = self._model.transcribe(audio, beam_size=1, language="en", vad_filter=True,
-                                             condition_on_previous_text=False)
+        segments, _ = self._model.transcribe(
+            audio,
+            beam_size=1,
+            language="en",
+            vad_filter=True,
+            condition_on_previous_text=False,
+            initial_prompt=self.INITIAL_PROMPT,
+        )
         return " ".join(s.text.strip() for s in segments).strip()
 
 
 class Recorder:
     """Blocking microphone capture. Speech starts when energy rises above an adaptive noise floor and
     ends after `silence_seconds` of quiet."""
-    MIN_THRESHOLD = 0.008
+    MIN_THRESHOLD = 0.0055
 
     def __init__(self):
         import sounddevice as sd  # type: ignore
         self.sd = sd
         sd.check_input_settings(samplerate=RATE, channels=1, dtype="float32")
 
-    def record(self, max_seconds: float = 12.0, silence_seconds: float = 1.2, min_seconds: float = 0.5,
+    def record(self, max_seconds: float = 15.0, silence_seconds: float = 2.0, min_seconds: float = 0.5,
                wait_timeout: Optional[float] = None, stop_flag: Optional[threading.Event] = None) -> np.ndarray:
         block = RATE // 10  # 100 ms
         frames: list[np.ndarray] = []
@@ -70,14 +82,14 @@ class Recorder:
                 total += 0.1
                 rms = float(np.sqrt(np.mean(chunk ** 2) + 1e-12))
                 if floor is None:
-                    floor = rms
+                    floor = min(rms, 0.015)
                 elif not started:
-                    floor = 0.9 * floor + 0.1 * rms
-                threshold = max(self.MIN_THRESHOLD, (floor or 0.0) * 3.5)
+                    floor = 0.92 * floor + 0.08 * min(rms, 0.015)
+                threshold = max(self.MIN_THRESHOLD, (floor or 0.003) * 1.8)
                 if rms > threshold:
                     if not started:
                         started = True
-                        frames = frames[-3:]  # keep 300 ms of pre-roll
+                        frames = frames[-6:]  # keep 600 ms of pre-roll
                     silent = 0.0
                 elif started:
                     silent += 0.1
@@ -88,6 +100,6 @@ class Recorder:
                     return np.zeros(0, dtype=np.float32)
                 if stop_flag is not None and stop_flag.is_set():
                     break
-        if not started:
-            return np.zeros(0, dtype=np.float32)
-        return np.concatenate(frames) if frames else np.zeros(0, dtype=np.float32)
+        if frames and started:
+            return np.concatenate(frames)
+        return np.zeros(0, dtype=np.float32)
