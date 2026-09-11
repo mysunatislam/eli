@@ -62,11 +62,11 @@ Windows 10/11, Python 3.10+, Node.js 18+, a microphone for voice, and an API key
 ## Install and run
 
 ```powershell
-git clone <this repo> C:\eli      # keep the path short (Windows 260-char limit breaks pip in deep folders)
-cd C:\eli
-install.bat                        # venv + pip + npm install; copies backend\.env.example to backend\.env
-notepad backend\.env               # paste GEMINI_API_KEY=... (or ANTHROPIC_API_KEY=...)
-start.bat                          # backend (minimised console) + overlay
+git clone https://github.com/mysunatislam/ellie_desktop.git C:\ellie      # keep path short (Windows 260-char path limit)
+cd C:\ellie
+install.bat                                                               # creates venv + pip + npm install; copies .env.example
+notepad backend\.env                                                      # paste your GEMINI_API_KEY (or ANTHROPIC_API_KEY)
+start.bat                                                                 # launches backend + animated desktop overlay
 ```
 
 The heart appears at the bottom-right of the display your cursor is on. Click it for the panel,
