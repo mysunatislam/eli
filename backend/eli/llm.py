@@ -486,11 +486,24 @@ class OfflineLocalProvider:
                 call = ToolCall(f"call_{secrets.token_hex(4)}", "query_rag", {"query": last_user})
                 return LLMResponse(text="Recalling from local encrypted memory...", tool_calls=[call], stop="tool")
 
-        # 5. General assistant conversational reply (Local Companion Persona)
-        reply = (
-            "I'm running in local offline mode. I can execute code scripts in VS Code or MATLAB, "
-            "verify syntax with AST checks, control desktop media, auto-approve dialogs, and search your local encrypted memory—completely free with zero API keys."
-        )
+        # 5. Conversational & Informational Reply
+        if any(w in low for w in ("hello", "hi", "hey", "who are you", "what can you do", "help")):
+            reply = (
+                "Hello! I'm Eli, your autonomous desktop AI companion. "
+                "I can write and test code in VS Code or MATLAB, check syntax, skip YouTube ads, control media, auto-approve dialogs, and manage your local memory. "
+                "For full open-ended chat and reasoning for free, you can connect Groq (free Llama 3.3 70B at console.groq.com) or run Ollama locally!"
+            )
+        elif any(w in low for w in ("how", "what", "why", "explain", "tell me")):
+            reply = (
+                f"I heard your question about '{last_user[:60]}'. "
+                "I am currently operating in zero-cost local mode. To get deep conversational reasoning and explanations for free just like Gemini, you can drop a free Groq key in .env (console.groq.com) or run Ollama. "
+                "In the meantime, I can generate code, open your IDE, and run local tasks for you!"
+            )
+        else:
+            reply = (
+                f"Understood: '{last_user}'. I can execute this locally on your desktop. "
+                "For unlimited free generative chat and reasoning without paid keys, you can connect Groq (free Llama 3.3 70B) or local Ollama!"
+            )
         if on_text:
             on_text(reply)
         return LLMResponse(text=reply, tool_calls=[], stop="end")
