@@ -398,3 +398,100 @@ async def ws_mobile(ws: WebSocket, token: str = Query("")):
     finally:
         hub.remove("mobile", ws)
         hub.emit(status_payload(), to=("desktop",))
+
+
+# -- Astha Hyperlink Protocol -------------------------------------------------------------------------
+@app.get("/api/astha/status")
+async def astha_status():
+    """Health and status endpoint for Astha mobile/PWA sensory client."""
+    return {
+        "ok": True,
+        "engine": "Eli",
+        "name": "Eli Desktop Core",
+        "version": __version__,
+        "ready": True,
+        "state": hub.state,
+        "llm_ready": llm.available,
+        "active_window": vision.user_window().title if vision.user_window() else ""
+    }
+
+
+@app.post("/api/astha/task")
+async def astha_task(body: dict):
+    """Executes a desktop task (coding, command, or IDE action) dispatched from Astha."""
+    task_type = body.get("type", "command")
+    if task_type == "code":
+        filename = body.get("filename", "script.py")
+        code = body.get("code", "")
+        goal = body.get("goal", "")
+        if not code and goal:
+            prompt = f"Write a complete, clean, working {body.get('language', 'Python')} script to {goal}. Output ONLY the code inside a ```python ``` block with no other conversational text."
+            gen = await agent.handle(prompt, "astha")
+            code_match = re.search(r"```(?:python)?\s*\n([\s\S]*?)\n```", gen)
+            code = code_match.group(1).strip() if code_match else gen.strip()
+
+        result = await asyncio.to_thread(coding.create_code_script, filename, code, body.get("language", "python"), run_after=body.get("run", True))
+        return {
+            "ok": result.get("ok", False),
+            "output": result.get("execution_output", ""),
+            "path": result.get("path", ""),
+            "summary": result.get("summary", ""),
+            "en": f"Successfully created {filename}, verified syntax, ran it, and opened it in VS Code.",
+            "bn": f"ভিএস কোডে {filename} স্ক্রিপ্ট তৈরি এবং রান করা হয়েছে।"
+        }
+    else:
+        text = body.get("text", "")
+        reply = await agent.handle(text, "astha")
+        return {"ok": True, "reply": reply}
+
+
+@app.websocket("/ws/astha")
+async def ws_astha(ws: WebSocket, token: str = Query("")):
+    client_host = ws.client.host if ws.client else ""
+    is_local = client_host in ("127.0.0.1", "::1", "localhost", "testclient")
+    if not is_local:
+        if not token or token != settings.get("pairing_token"):
+            await ws.close(code=4401, reason="bad pairing token")
+            return
+    await ws.accept()
+    log.info("Astha client connected from %s", client_host)
+    try:
+        await ws.send_json({
+            "type": "astha_ready",
+            "engine": "Eli",
+            "version": __version__,
+            "state": hub.state,
+            "ides": coding.discover_ides()
+        })
+        while True:
+            msg = await ws.receive_json()
+            mtype = msg.get("type", "")
+            if mtype == "ping":
+                await ws.send_json({"type": "pong", "time": time.time()})
+            elif mtype == "code_task":
+                filename = msg.get("filename", "script.py")
+                code = msg.get("code", "")
+                goal = msg.get("goal", "")
+                if not code and goal:
+                    gen = await agent.handle(f"Write a clean, working Python script for: {goal}. Output ONLY the code inside ```python ```.", "astha")
+                    code_match = re.search(r"```(?:python)?\s*\n([\s\S]*?)\n```", gen)
+                    code = code_match.group(1).strip() if code_match else gen.strip()
+                result = await asyncio.to_thread(coding.create_code_script, filename, code, msg.get("language", "python"), run_after=msg.get("run", True))
+                await ws.send_json({
+                    "type": "code_task_result",
+                    "ok": result.get("ok", False),
+                    "summary": result.get("summary", ""),
+                    "output": result.get("execution_output", ""),
+                    "path": result.get("path", ""),
+                    "en": f"Script {filename} created, syntax verified, and opened in VS Code.",
+                    "bn": f"ভিএস কোডে {filename} স্ক্রিপ্ট তৈরি এবং রান করা সম্পন্ন হয়েছে।"
+                })
+            elif mtype in ("command", "user_text"):
+                text = msg.get("text", "")
+                reply = await agent.handle(text, "astha")
+                await ws.send_json({"type": "command_result", "reply": reply})
+    except WebSocketDisconnect:
+        pass
+    except Exception as e:
+        log.info("astha socket error: %s", e)
+

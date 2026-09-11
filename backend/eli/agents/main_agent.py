@@ -781,30 +781,13 @@ class MainAgent:
                 log.warning("LLM script generation failed: %s", e)
 
         if not code:
-            code = (
-                '"""\n'
-                f'Script: {topic or "Hello World Demonstration"}\n'
-                'Created by Eli Autonomous AI Companion.\n'
-                '"""\n'
-                'import sys\n\n'
-                'def greet(name: str = "Mysunat") -> str:\n'
-                '    """Return a warm greeting with environment verification."""\n'
-                '    return f"Hello, {name}! Your Python script is created, verified, and running successfully."\n\n'
-                'def main() -> None:\n'
-                '    msg = greet()\n'
-                '    print("=" * 60)\n'
-                '    print(msg)\n'
-                '    print(f"Python Version: {sys.version}")\n'
-                '    print("Eli successfully validated AST syntax and opened VS Code.")\n'
-                '    print("=" * 60)\n\n'
-                'if __name__ == "__main__":\n'
-                '    main()\n'
-            )
-
-        if topic and topic.strip():
+            gen_filename, code = self.coding.generate_code_offline(topic, lang)
+            filename = gen_filename
+        elif topic and topic.strip():
             clean_name = re.sub(r'[^a-zA-Z0-9_]', '_', topic.lower().strip())[:30].strip('_')
             if clean_name:
-                filename = f"{clean_name}.py"
+                ext = ".m" if lang == "matlab" else ".py"
+                filename = f"{clean_name}{ext}"
 
         res = await asyncio.to_thread(
             self.coding.create_code_script,
@@ -922,13 +905,12 @@ class MainAgent:
                 log.warning("LLM call failed: %s", e)
                 if self.history and self.history[-1]["role"] == "user":
                     self.history.pop()
-                self.hub.set_state("error")
+                self.hub.set_state("idle")
                 self._spoke_stream = False
                 fallback_res = await self._execute_offline_instruction(self._last_user_text)
                 if fallback_res:
-                    self.hub.set_state("idle")
                     return fallback_res
-                return f"Reasoning API is currently unreachable ({why}). In offline mode, I can still play YouTube music, skip ads, pause/stop playback, open VS Code or MATLAB, auto-allow Antigravity dialogs, check code syntax, or teach 3D modeling."
+                return f"Running in local offline mode ({why}). I can open VS Code or MATLAB, generate and test code scripts, control media, auto-approve dialogs, and search your local encrypted memory—completely free without any API keys."
             parts = ([text_part(resp.text)] if resp.text else []) + \
                     [{"type": "tool_call", "id": c.id, "name": c.name, "args": c.args} for c in resp.tool_calls]
             self.history.append({"role": "assistant", "parts": parts or [text_part("")], "raw": resp.raw, "raw_provider": self.llm.name})
@@ -1021,6 +1003,12 @@ class MainAgent:
                     return res
             except Exception as e:
                 log.warning("offline intent run failed: %s", e)
+
+        # 1b. Offline code generation fallback
+        if any(k in low for k in ("write", "create", "make", "generate", "code", "type")) and any(k in low for k in ("python", "code", "matlab", "script", "program", "fibonacci", "prime", "math", "calculator", "game")):
+            lang = "matlab" if "matlab" in low else "python"
+            topic = re.sub(r"^(?:(?:can you |could you |please |would you )*(?:open (?:vs code|vscode|the editor) (?:and |to )?)?)*(?:write|create|make|generate|type|code)(?: (?:a|an|some))?(?: (?:basic|sample|new))?(?: (?:python|matlab|c\+\+|c))?\s*(?:script|code|program|file)?(?: (?:in|into|for) (?:vs code|vscode))?(?: (?:about|for|to|like) )?", "", raw, flags=re.I).strip()
+            return await self._create_and_open_script_intent(lang, topic)
 
         # 2. Antigravity dialog / prompt auto-allow and click
         if ("allow" in low or "submit" in low or "proceed" in low) and any(k in low for k in ("antigravity", "dialog", "prompt", "away", "everytime", "every time", "always", "auto")):

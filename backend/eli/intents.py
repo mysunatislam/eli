@@ -38,12 +38,12 @@ PATTERNS: list[tuple[str, re.Pattern]] = [
     ("search", re.compile(
         r"^(?:search|google|look up)(?: the web| google| online| the internet)?(?: for)? (.+?)[.!?]?$", re.I)),
     ("write_code", re.compile(
-        r"^(?:(?:can you |please )?(?:open (?:vs code|vscode|the editor) (?:and |to )?)?)?"
-        r"(?:write|create|start writing|make|generate|type)(?: (?:a|an))? "
+        r"^(?:(?:can you |could you |please |would you )*(?:open (?:vs code|vscode|the editor) (?:and |to )?)?)*"
+        r"(?:write|create|start writing|make|generate|type|code)(?: (?:a|an|some))? "
         r"(?:basic |sample |new |original )?(python|matlab|c\+\+|c|javascript|web)?\s*"
-        r"(?:script|code|program|file)"
+        r"(?:script|code|program|file)?"
         r"(?: (?:in|into|for|using) (?:vs code|vscode|the editor))?"
-        r"(?: (?:about|for|like) (.+?))?[.!?]?$",
+        r"(?: (?:about|for|to|like) (.+?))?[.!?]?$",
         re.I
     )),
     ("type_in", re.compile(r"^(?:write|type) (.+?) (?:in|into) (notepad|word)[.!]?$", re.I)),
