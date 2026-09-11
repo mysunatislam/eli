@@ -416,11 +416,41 @@ async def astha_status():
     }
 
 
+def is_lan_or_local(host: str) -> bool:
+    if not host or host in ("127.0.0.1", "::1", "localhost", "testclient"):
+        return True
+    if host.startswith("192.168.") or host.startswith("10.") or host.startswith("127."):
+        return True
+    if host.startswith("172."):
+        parts = host.split(".")
+        if len(parts) >= 2 and parts[1].isdigit() and 16 <= int(parts[1]) <= 31:
+            return True
+    return False
+
+
 @app.post("/api/astha/task")
 async def astha_task(body: dict):
-    """Executes a desktop task (coding, command, or IDE action) dispatched from Astha."""
+    """Executes a desktop task (coding, command, phone event, or IDE action) dispatched from Astha."""
     task_type = body.get("type", "command")
-    if task_type == "code":
+    if task_type == "phone_event":
+        event_name = body.get("event", "")
+        caller = body.get("caller", "")
+        callee = body.get("callee", "")
+        app_name = body.get("app", "")
+        log.info("Received phone event via HTTP from Astha: event=%s, caller=%s, app=%s", event_name, caller, app_name)
+        if event_name == "incoming_call":
+            try:
+                from eli import voice
+                asyncio.create_task(asyncio.to_thread(voice.speak_text, f"Astha alert: incoming call from {caller or 'unknown caller'}"))
+            except Exception:
+                pass
+            try:
+                memories.save_memory("phone_call", f"Incoming call from {caller}", category="phone_events")
+            except Exception:
+                pass
+        hub.emit({"type": "astha_phone_event", "event": event_name, "caller": caller, "callee": callee, "app": app_name})
+        return {"ok": True, "event": event_name}
+    elif task_type == "code":
         filename = body.get("filename", "script.py")
         code = body.get("code", "")
         goal = body.get("goal", "")
@@ -448,8 +478,7 @@ async def astha_task(body: dict):
 @app.websocket("/ws/astha")
 async def ws_astha(ws: WebSocket, token: str = Query("")):
     client_host = ws.client.host if ws.client else ""
-    is_local = client_host in ("127.0.0.1", "::1", "localhost", "testclient")
-    if not is_local:
+    if not is_lan_or_local(client_host):
         if not token or token != settings.get("pairing_token"):
             await ws.close(code=4401, reason="bad pairing token")
             return
@@ -468,6 +497,24 @@ async def ws_astha(ws: WebSocket, token: str = Query("")):
             mtype = msg.get("type", "")
             if mtype == "ping":
                 await ws.send_json({"type": "pong", "time": time.time()})
+            elif mtype == "phone_event":
+                event_name = msg.get("event", "")
+                caller = msg.get("caller", "")
+                callee = msg.get("callee", "")
+                app_name = msg.get("app", "")
+                log.info("Received phone event over WS from Astha: event=%s, caller=%s, app=%s", event_name, caller, app_name)
+                if event_name == "incoming_call":
+                    try:
+                        from eli import voice
+                        asyncio.create_task(asyncio.to_thread(voice.speak_text, f"Astha alert: incoming call from {caller or 'unknown caller'}"))
+                    except Exception:
+                        pass
+                    try:
+                        memories.save_memory("phone_call", f"Incoming call from {caller}", category="phone_events")
+                    except Exception:
+                        pass
+                hub.emit({"type": "astha_phone_event", "event": event_name, "caller": caller, "callee": callee, "app": app_name})
+                await ws.send_json({"type": "phone_event_ack", "ok": True, "event": event_name})
             elif mtype == "code_task":
                 filename = msg.get("filename", "script.py")
                 code = msg.get("code", "")
@@ -494,4 +541,5 @@ async def ws_astha(ws: WebSocket, token: str = Query("")):
         pass
     except Exception as e:
         log.info("astha socket error: %s", e)
+
 
