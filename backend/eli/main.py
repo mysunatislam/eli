@@ -350,6 +350,12 @@ async def handle_message(msg: dict, source: str) -> None:
 # -- WebSockets ---------------------------------------------------------------------------------------
 @app.websocket("/ws/desktop")
 async def ws_desktop(ws: WebSocket):
+    # Security: strictly reject any non-localhost connection to the desktop control websocket
+    client_host = ws.client.host if ws.client else ""
+    if client_host not in ("127.0.0.1", "::1", "localhost", "testclient"):
+        log.warning("Security alert: rejected non-localhost connection to /ws/desktop from %s", client_host)
+        await ws.close(code=1008, reason="Forbidden: localhost only")
+        return
     await ws.accept()
     hub.add("desktop", ws)
     try:
