@@ -24,6 +24,7 @@ import re
 import secrets
 import socket
 import time
+import urllib.parse
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Optional
@@ -480,13 +481,55 @@ class OfflineLocalProvider:
                 call = ToolCall(f"call_{secrets.token_hex(4)}", "open_ide", {"ide": "matlab"})
                 return LLMResponse(text="Opening MATLAB...", tool_calls=[call], stop="tool")
 
-        # 4. Recall / Memory query -> query_rag
+        # 4. Web & Social Media Navigation -> open_url / web_search
+        if any(k in low for k in ("facebook", "messenger", "fb", "youtube", "google", "website", "browse")):
+            if "facebook" in low or "messenger" in low:
+                target_name = re.sub(r".*?(?:search for|search|find|look for|message|text)\s+", "", last_user, flags=re.I).strip()
+                target_name = re.sub(r"(?:on facebook|on messenger|in messenger|in facebook).*$", "", target_name, flags=re.I).strip()
+                if target_name and target_name.lower() not in ("facebook", "messenger", "fb"):
+                    q = urllib.parse.quote_plus(target_name)
+                    url = f"https://www.facebook.com/search/top?q={q}"
+                    msg = f"Opening Facebook and searching for '{target_name}'..."
+                else:
+                    url = "https://www.facebook.com/messages/t/"
+                    msg = "Opening Facebook Messenger..."
+                if "open_url" in tools_dict:
+                    call = ToolCall(f"call_{secrets.token_hex(4)}", "open_url", {"url": url})
+                    if on_text: on_text(msg)
+                    return LLMResponse(text=msg, tool_calls=[call], stop="tool")
+
+            if "youtube" in low:
+                query = re.sub(r"^(?:(?:can you |please )*(?:play|search|find|listen to)?\s*(?:on youtube)?\s*)", "", last_user, flags=re.I).strip()
+                if "play_youtube" in tools_dict and query:
+                    call = ToolCall(f"call_{secrets.token_hex(4)}", "play_youtube", {"query": query})
+                    msg = f"Playing '{query}' on YouTube..."
+                    if on_text: on_text(msg)
+                    return LLMResponse(text=msg, tool_calls=[call], stop="tool")
+
+            if "google" in low or "search" in low:
+                query = re.sub(r"^(?:(?:can you |please )*(?:search|google|look up)(?: for)?\s*)", "", last_user, flags=re.I).strip()
+                if "web_search" in tools_dict and query:
+                    call = ToolCall(f"call_{secrets.token_hex(4)}", "web_search", {"query": query, "engine": "google"})
+                    msg = f"Searching Google for '{query}'..."
+                    if on_text: on_text(msg)
+                    return LLMResponse(text=msg, tool_calls=[call], stop="tool")
+
+        # 5. Open General Apps -> open_app
+        if low.startswith("open ") or low.startswith("launch "):
+            app_name = re.sub(r"^(?:open|launch)\s+(?:the\s+)?", "", last_user, flags=re.I).strip()
+            if app_name and len(app_name) < 40 and "open_app" in tools_dict:
+                call = ToolCall(f"call_{secrets.token_hex(4)}", "open_app", {"name": app_name})
+                msg = f"Opening {app_name}..."
+                if on_text: on_text(msg)
+                return LLMResponse(text=msg, tool_calls=[call], stop="tool")
+
+        # 6. Recall / Memory query -> query_rag
         if any(k in low for k in ("remember", "memory", "solution", "how did i", "past")):
             if "query_rag" in tools_dict:
                 call = ToolCall(f"call_{secrets.token_hex(4)}", "query_rag", {"query": last_user})
                 return LLMResponse(text="Recalling from local encrypted memory...", tool_calls=[call], stop="tool")
 
-        # 5. Conversational & Informational Reply
+        # 7. Conversational & Informational Reply
         if any(w in low for w in ("hello", "hi", "hey", "who are you", "what can you do", "help")):
             reply = (
                 "Hello! I'm Eli, your autonomous desktop AI companion. "

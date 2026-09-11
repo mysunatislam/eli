@@ -37,6 +37,10 @@ PATTERNS: list[tuple[str, re.Pattern]] = [
         r"|^youtube (?:play |search )?(?:the )?(?:music |song )?(.+?)[.!?]?$", re.I)),
     ("search", re.compile(
         r"^(?:search|google|look up)(?: the web| google| online| the internet)?(?: for)? (.+?)[.!?]?$", re.I)),
+    ("facebook", re.compile(
+        r"^(?:(?:can you |could you |please )*(?:go to |go |open )?(?:facebook|fb|messenger)(?: and |, )?(?:open messenger|search for|search|find|look for)?(?: for)?\s*(.+?)[.!?]?)$",
+        re.I
+    )),
     ("write_code", re.compile(
         r"^(?:(?:can you |could you |please |would you )*(?:open (?:vs code|vscode|the editor) (?:and |to )?)?)*"
         r"(?:write|create|start writing|make|generate|type|code)(?: (?:a|an|some))? "

@@ -16,6 +16,7 @@ import os
 import re
 import secrets
 import time
+import urllib.parse
 from dataclasses import dataclass
 from typing import Any, Optional
 
@@ -614,6 +615,19 @@ class MainAgent:
             return await asyncio.to_thread(self.coding.open_ide, ide, path)
         if kind == "search":
             return await asyncio.to_thread(a.web_search, arg, "google")
+        if kind == "facebook":
+            raw_target = groups[0].strip() if groups and groups[0] else ""
+            clean_target = re.sub(r"^(?:,\s*)?(?:open messenger|messenger|search for|search|find|look for|open)\s*", "", raw_target, flags=re.I).strip()
+            clean_target = re.sub(r"^(?:,\s*)?(?:search for|search|find|look for|open)\s*", "", clean_target, flags=re.I).strip().strip("',.\"")
+            if clean_target and clean_target.lower() not in ("facebook", "messenger", "fb"):
+                q = urllib.parse.quote_plus(clean_target)
+                url = f"https://www.facebook.com/search/top?q={q}"
+                await asyncio.to_thread(a.open_url, url)
+                return f"Opening Facebook and searching for '{clean_target}'."
+            else:
+                url = "https://www.facebook.com/messages/t/"
+                await asyncio.to_thread(a.open_url, url)
+                return "Opening Facebook Messenger."
         if kind == "open_project":
             bundle = m.project_bundle(arg)
             if not bundle.get("found") and self.llm.available:
