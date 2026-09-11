@@ -230,7 +230,7 @@ class GeminiProvider:
                 out.append(T.Content(role="user" if t["role"] == "user" else "model", parts=parts))
         return out
 
-    FALLBACK_MODELS = ("gemini-3-flash-preview", "gemini-3.1-flash-lite-preview", "gemini-3.6-flash", "gemini-flash-latest")
+    FALLBACK_MODELS = ("gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-2.5-flash", "gemini-flash-latest")
 
     async def complete(self, system: tuple[str, str], turns: list[dict], tools: list[dict], on_text: OnText = None) -> LLMResponse:
         try:
@@ -523,30 +523,48 @@ class OfflineLocalProvider:
                 if on_text: on_text(msg)
                 return LLMResponse(text=msg, tool_calls=[call], stop="tool")
 
-        # 6. Recall / Memory query -> query_rag
-        if any(k in low for k in ("remember", "memory", "solution", "how did i", "past")):
-            if "query_rag" in tools_dict:
+        # 6. Recall / Knowledge Base / Memory query -> search_knowledge_base or query_rag
+        if any(k in low for k in ("remember", "memory", "solution", "how did i", "past", "what do you know", "search doc", "document", "docs")):
+            if "search_knowledge_base" in tools_dict:
+                call = ToolCall(f"call_{secrets.token_hex(4)}", "search_knowledge_base", {"query": last_user, "limit": 4})
+                return LLMResponse(text="Searching local knowledge base and documents...", tool_calls=[call], stop="tool")
+            elif "query_rag" in tools_dict:
                 call = ToolCall(f"call_{secrets.token_hex(4)}", "query_rag", {"query": last_user})
                 return LLMResponse(text="Recalling from local encrypted memory...", tool_calls=[call], stop="tool")
 
-        # 7. Conversational & Informational Reply
+        # 7. Check if system prompt already contains RAG knowledge relevant to this query
+        stable, dynamic = system
+        if "[RAG MEMORY" in dynamic or "Local Document" in dynamic or "Past Verified Solutions" in dynamic:
+            # Extract knowledge sections from dynamic prompt
+            extracted = []
+            for line in dynamic.splitlines():
+                if any(tag in line for tag in ("From '", "Solution for", "Preferences:", "Project:")):
+                    extracted.append(line.strip())
+                elif extracted and line.strip().startswith("-"):
+                    extracted.append(line.strip())
+            if extracted:
+                rag_summary = "\n".join(extracted[:6])
+                reply = f"Based on your local knowledge base and memory:\n{rag_summary}"
+                if on_text:
+                    on_text(reply)
+                return LLMResponse(text=reply, tool_calls=[], stop="end")
+
+        # 8. Conversational & Informational Reply
         if any(w in low for w in ("hello", "hi", "hey", "who are you", "what can you do", "help")):
             reply = (
-                "Hello! I'm Eli, your autonomous desktop AI companion. "
-                "I can write and test code in VS Code or MATLAB, check syntax, skip YouTube ads, control media, auto-approve dialogs, and manage your local memory. "
-                "For full open-ended chat and reasoning for free, you can connect Groq (free Llama 3.3 70B at console.groq.com) or run Ollama locally!"
+                "Hello! I'm Ellie, your autonomous desktop AI companion. "
+                "I have a full local RAG and knowledge pipeline, and can create and test scripts in VS Code or MATLAB, "
+                "verify syntax, control YouTube/media, search Facebook/web, and autonomously manage your desktop."
             )
         elif any(w in low for w in ("how", "what", "why", "explain", "tell me")):
             reply = (
-                f"I heard your question about '{last_user[:60]}'. "
-                "I am currently operating in zero-cost local mode. To get deep conversational reasoning and explanations for free just like Gemini, you can drop a free Groq key in .env (console.groq.com) or run Ollama. "
-                "In the meantime, I can generate code, open your IDE, and run local tasks for you!"
+                f"I've noted your question about '{last_user[:60]}'. "
+                "I am running with your local knowledge base and tools active. "
+                "I can index documents into our RAG pipeline, write and execute code, and operate your desktop tools directly."
             )
         else:
-            reply = (
-                f"Understood: '{last_user}'. I can execute this locally on your desktop. "
-                "For unlimited free generative chat and reasoning without paid keys, you can connect Groq (free Llama 3.3 70B) or local Ollama!"
-            )
+            reply = f"Understood: '{last_user}'. Executing on your desktop with local RAG memory and tool orchestration."
+
         if on_text:
             on_text(reply)
         return LLMResponse(text=reply, tool_calls=[], stop="end")
@@ -622,7 +640,7 @@ class LLM:
                 elif name == "gemini":
                     if not gemini_key:
                         continue
-                    self.provider = GeminiProvider(os.getenv("ELI_GEMINI_MODEL", "gemini-3.6-flash"), gemini_key)
+                    self.provider = GeminiProvider(os.getenv("ELI_GEMINI_MODEL", "gemini-3.5-flash"), gemini_key)
                 elif name == "anthropic":
                     if not anthropic_creds:
                         continue

@@ -108,6 +108,86 @@ class Entity:
     last_seen: float
 
 
+@dataclass
+class KnowledgeChunk:
+    id: int
+    doc_id: int
+    chunk_index: int
+    section_title: str
+    content: str
+    doc_path: str = ""
+    doc_title: str = ""
+    category: str = "general"
+    score: float = 0.0
+
+    def as_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "doc_id": self.doc_id,
+            "chunk_index": self.chunk_index,
+            "section_title": self.section_title,
+            "content": self.content,
+            "doc_path": self.doc_path,
+            "doc_title": self.doc_title,
+            "category": self.category,
+            "score": round(self.score, 3)
+        }
+
+
+def chunk_text(text: str, chunk_size: int = 600, overlap: int = 120) -> list[tuple[str, str]]:
+    """Splits text into (section_title, chunk_content) pairs.
+    Handles Markdown headers, function boundaries, and sliding windows.
+    """
+    lines = text.splitlines()
+    sections: list[tuple[str, str]] = []
+    current_title = "General"
+    current_lines = []
+
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith(("# ", "## ", "### ", "#### ")):
+            if current_lines:
+                sec_text = "\n".join(current_lines).strip()
+                if sec_text:
+                    sections.append((current_title, sec_text))
+                current_lines = []
+            current_title = stripped.lstrip("#").strip()
+        else:
+            current_lines.append(line)
+
+    if current_lines:
+        sec_text = "\n".join(current_lines).strip()
+        if sec_text:
+            sections.append((current_title, sec_text))
+
+    if not sections:
+        sections = [("General", text)]
+
+    chunks: list[tuple[str, str]] = []
+    for title, sec_content in sections:
+        if len(sec_content) <= chunk_size:
+            if sec_content.strip():
+                chunks.append((title, sec_content.strip()))
+            continue
+
+        start = 0
+        idx = 1
+        while start < len(sec_content):
+            end = start + chunk_size
+            if end < len(sec_content):
+                split_at = max(sec_content.rfind("\n\n", start, end), sec_content.rfind(". ", start, end))
+                if split_at > start + chunk_size // 2:
+                    end = split_at + 1
+            chunk_sub = sec_content[start:end].strip()
+            if chunk_sub:
+                sub_title = f"{title} (part {idx})" if idx > 1 else title
+                chunks.append((sub_title, chunk_sub))
+                idx += 1
+            start = end - overlap if (end - overlap) > start else end
+
+    return chunks
+
+
 class MemoryAgent:
     def __init__(self, data_dir: Path):
         data_dir.mkdir(parents=True, exist_ok=True)
@@ -186,10 +266,23 @@ class MemoryAgent:
                 CREATE TABLE IF NOT EXISTS world_frames(
                     id INTEGER PRIMARY KEY, ts REAL NOT NULL, source TEXT, caption BLOB NOT NULL, thumb BLOB,
                     memory_id INTEGER);
+                CREATE TABLE IF NOT EXISTS documents(
+                    id INTEGER PRIMARY KEY, path TEXT NOT NULL UNIQUE, title TEXT NOT NULL,
+                    category TEXT DEFAULT 'general', checksum TEXT NOT NULL, chunk_count INTEGER DEFAULT 0,
+                    mtime REAL NOT NULL, created REAL NOT NULL);
+                CREATE TABLE IF NOT EXISTS knowledge_chunks(
+                    id INTEGER PRIMARY KEY, doc_id INTEGER REFERENCES documents(id) ON DELETE CASCADE,
+                    chunk_index INTEGER NOT NULL, section_title TEXT, content BLOB NOT NULL,
+                    tokens INTEGER DEFAULT 0, importance REAL DEFAULT 0.6);
+                CREATE TABLE IF NOT EXISTS knowledge_vectors(
+                    chunk_id INTEGER PRIMARY KEY REFERENCES knowledge_chunks(id) ON DELETE CASCADE,
+                    model TEXT, vec BLOB NOT NULL);
                 CREATE INDEX IF NOT EXISTS idx_conv_ts ON conversations(ts);
                 CREATE INDEX IF NOT EXISTS idx_mem_kind ON memories(kind);
                 CREATE INDEX IF NOT EXISTS idx_edges_src ON edges(src);
                 CREATE INDEX IF NOT EXISTS idx_edges_dst ON edges(dst);
+                CREATE INDEX IF NOT EXISTS idx_doc_path ON documents(path);
+                CREATE INDEX IF NOT EXISTS idx_chunk_doc ON knowledge_chunks(doc_id);
                 """
             )
             self.db.execute("PRAGMA foreign_keys=ON")
@@ -203,6 +296,7 @@ class MemoryAgent:
             self.db.enable_load_extension(False)
             with self._lock:
                 self.db.execute(f"CREATE VIRTUAL TABLE IF NOT EXISTS vec_memories USING vec0(memory_id INTEGER PRIMARY KEY, embedding float[{DIM}])")
+                self.db.execute(f"CREATE VIRTUAL TABLE IF NOT EXISTS vec_knowledge USING vec0(chunk_id INTEGER PRIMARY KEY, embedding float[{DIM}])")
                 self.db.commit()
             return True
         except Exception as e:
@@ -534,15 +628,210 @@ class MemoryAgent:
             n_edge = self.db.execute("SELECT COUNT(*) FROM edges").fetchone()[0]
             n_wf = self.db.execute("SELECT COUNT(*) FROM world_frames").fetchone()[0]
             n_jobs = self.db.execute("SELECT COUNT(*) FROM jobs WHERE status='active'").fetchone()[0]
+            n_docs = self.db.execute("SELECT COUNT(*) FROM documents").fetchone()[0]
+            n_chunks = self.db.execute("SELECT COUNT(*) FROM knowledge_chunks").fetchone()[0]
         return {"memories": n_mem, "conversation_lines": n_conv, "tasks": n_task, "entities": n_ent, "edges": n_edge,
-                "photos": n_wf, "jobs": n_jobs, "embedder": self.embedder.name, "sqlite_vec": self.vec_ok, "key_source": self.key_source,
+                "photos": n_wf, "jobs": n_jobs, "documents": n_docs, "knowledge_chunks": n_chunks,
+                "embedder": self.embedder.name, "sqlite_vec": self.vec_ok, "key_source": self.key_source,
                 "db": str(self.db_path)}
+
+    # -- Knowledge Base & Document RAG -------------------------------------------------------------
+    def ingest_file(self, path: str | Path, category: str = "general", title: str = "") -> dict:
+        p = Path(path).resolve()
+        if not p.exists() or not p.is_file():
+            return {"ok": False, "error": f"File not found: {path}", "chunks": 0}
+
+        try:
+            raw_bytes = p.read_bytes()
+            text = ""
+            for enc in ("utf-8", "latin-1", "cp1252"):
+                try:
+                    text = raw_bytes.decode(enc)
+                    break
+                except Exception:
+                    continue
+            if not text:
+                return {"ok": False, "error": "Unable to decode file text", "chunks": 0}
+        except Exception as e:
+            return {"ok": False, "error": str(e), "chunks": 0}
+
+        checksum = hashlib.sha256(raw_bytes).hexdigest()
+        doc_title = title or p.stem.replace("_", " ").title()
+        path_str = str(p)
+        mtime = p.stat().st_mtime
+
+        with self._lock:
+            row = self.db.execute("SELECT id, checksum, chunk_count FROM documents WHERE path=?", (path_str,)).fetchone()
+            if row and row[1] == checksum:
+                return {"ok": True, "status": "unchanged", "doc_id": row[0], "title": doc_title, "chunks": row[2]}
+
+            if row:
+                doc_id = row[0]
+                old_chunk_ids = [r[0] for r in self.db.execute("SELECT id FROM knowledge_chunks WHERE doc_id=?", (doc_id,)).fetchall()]
+                for cid in old_chunk_ids:
+                    self.db.execute("DELETE FROM knowledge_vectors WHERE chunk_id=?", (cid,))
+                    if self.vec_ok:
+                        self.db.execute("DELETE FROM vec_knowledge WHERE chunk_id=?", (cid,))
+                self.db.execute("DELETE FROM knowledge_chunks WHERE doc_id=?", (doc_id,))
+                self.db.execute("UPDATE documents SET checksum=?, mtime=?, title=?, category=? WHERE id=?",
+                                (checksum, mtime, doc_title, category, doc_id))
+            else:
+                cur = self.db.execute("INSERT INTO documents(path, title, category, checksum, chunk_count, mtime, created) VALUES(?,?,?,?,0,?,?)",
+                                      (path_str, doc_title, category, checksum, mtime, time.time()))
+                doc_id = cur.lastrowid
+
+        chunks = chunk_text(text)
+        chunk_count = len(chunks)
+
+        with self._lock:
+            for idx, (sec_title, chunk_content) in enumerate(chunks):
+                cur = self.db.execute(
+                    "INSERT INTO knowledge_chunks(doc_id, chunk_index, section_title, content, tokens, importance) VALUES(?,?,?,?,?,?)",
+                    (doc_id, idx, sec_title, self.enc(chunk_content), len(chunk_content) // 4, 0.6)
+                )
+                cid = cur.lastrowid
+                vec = self.embedder.embed(f"{doc_title} {sec_title}: {chunk_content}")
+                self.db.execute("INSERT INTO knowledge_vectors(chunk_id, model, vec) VALUES(?,?,?)", (cid, self.embedder.name, vec.tobytes()))
+                if self.vec_ok:
+                    self.db.execute("INSERT INTO vec_knowledge(chunk_id, embedding) VALUES(?,?)", (cid, vec.tobytes()))
+
+            self.db.execute("UPDATE documents SET chunk_count=? WHERE id=?", (chunk_count, doc_id))
+            self.db.commit()
+
+        self.audit("knowledge", "ingest", path_str, f"{chunk_count} chunks")
+        log.info("Ingested document '%s' (%d chunks) into knowledge base", doc_title, chunk_count)
+        return {"ok": True, "status": "ingested", "doc_id": doc_id, "title": doc_title, "chunks": chunk_count}
+
+    def ingest_directory(self, dir_path: str | Path, extensions: Optional[list[str]] = None,
+                         recursive: bool = True, max_files: int = 150) -> dict:
+        dp = Path(dir_path).resolve()
+        if not dp.exists() or not dp.is_dir():
+            return {"ok": False, "error": f"Directory not found: {dir_path}", "files": 0}
+
+        exts = set(e.lower().lstrip(".") for e in (extensions or ["md", "txt", "py", "m", "js", "ts", "json", "yml", "yaml", "html"]))
+        files = []
+        pattern = "**/*" if recursive else "*"
+        for f in dp.glob(pattern):
+            if f.is_file() and f.suffix.lstrip(".").lower() in exts:
+                p_str = str(f).lower()
+                if any(ignored in p_str for ignored in ("\\.git\\", "\\node_modules\\", "\\.venv\\", "\\__pycache__\\", "\\brain\\")):
+                    continue
+                files.append(f)
+                if len(files) >= max_files:
+                    break
+
+        ingested = 0
+        unchanged = 0
+        total_chunks = 0
+        for f in files:
+            res = self.ingest_file(f, category="codebase" if f.suffix in (".py", ".m", ".js", ".ts") else "documentation")
+            if res.get("ok"):
+                if res.get("status") == "ingested":
+                    ingested += 1
+                else:
+                    unchanged += 1
+                total_chunks += res.get("chunks", 0)
+
+        return {"ok": True, "files_found": len(files), "ingested": ingested, "unchanged": unchanged, "total_chunks": total_chunks}
+
+    def ingest_text(self, text: str, title: str, category: str = "note") -> dict:
+        if self.private or not text.strip():
+            return {"ok": False, "error": "Empty text or private mode", "chunks": 0}
+        virtual_path = f"note://{time.strftime('%Y%m%d_%H%M%S')}_{re.sub(r'[^a-zA-Z0-9_]', '_', title.lower()[:30])}"
+        checksum = hashlib.sha256(text.encode("utf-8")).hexdigest()
+        now = time.time()
+        with self._lock:
+            cur = self.db.execute("INSERT INTO documents(path, title, category, checksum, chunk_count, mtime, created) VALUES(?,?,?,?,0,?,?)",
+                                  (virtual_path, title, category, checksum, now, now))
+            doc_id = cur.lastrowid
+        chunks = chunk_text(text)
+        chunk_count = len(chunks)
+        with self._lock:
+            for idx, (sec_title, chunk_content) in enumerate(chunks):
+                cur = self.db.execute(
+                    "INSERT INTO knowledge_chunks(doc_id, chunk_index, section_title, content, tokens, importance) VALUES(?,?,?,?,?,?)",
+                    (doc_id, idx, sec_title, self.enc(chunk_content), len(chunk_content) // 4, 0.7)
+                )
+                cid = cur.lastrowid
+                vec = self.embedder.embed(f"{title} {sec_title}: {chunk_content}")
+                self.db.execute("INSERT INTO knowledge_vectors(chunk_id, model, vec) VALUES(?,?,?)", (cid, self.embedder.name, vec.tobytes()))
+                if self.vec_ok:
+                    self.db.execute("INSERT INTO vec_knowledge(chunk_id, embedding) VALUES(?,?)", (cid, vec.tobytes()))
+            self.db.execute("UPDATE documents SET chunk_count=? WHERE id=?", (chunk_count, doc_id))
+            self.db.commit()
+        return {"ok": True, "status": "ingested", "doc_id": doc_id, "title": title, "chunks": chunk_count}
+
+    def search_knowledge(self, query: str, limit: int = 5, category: Optional[str] = None, min_score: float = 0.15) -> list[KnowledgeChunk]:
+        if self.private:
+            return []
+
+        qvec = self.embedder.embed(query)
+        qtok = tokens(query)
+        qset = set(qtok)
+
+        q = ("SELECT c.id, c.doc_id, c.chunk_index, c.section_title, c.content, c.importance, v.vec, d.path, d.title, d.category "
+             "FROM knowledge_chunks c "
+             "JOIN knowledge_vectors v ON v.chunk_id=c.id "
+             "JOIN documents d ON d.id=c.doc_id")
+        args = ()
+        if category:
+            q += " WHERE d.category=?"
+            args = (category,)
+
+        with self._lock:
+            rows = self.db.execute(q, args).fetchall()
+
+        scored: list[KnowledgeChunk] = []
+        for cid, doc_id, c_idx, sec_title, blob, imp, vec_bytes, path, title, cat in rows:
+            text = self.dec(blob)
+            if not text:
+                continue
+            vec = np.frombuffer(vec_bytes, dtype=np.float32)
+            cos = float(np.dot(qvec, vec)) if vec.shape == qvec.shape else 0.0
+            cset = set(tokens(f"{title} {sec_title} {text}"))
+            jac = len(qset & cset) / max(1, len(qset | cset)) if qset else 0.0
+            overlap = len(qset & cset) / max(1, len(qset)) if qset else 0.0
+            score = 0.5 * cos + 0.25 * jac + 0.2 * overlap + 0.05 * (imp or 0.5)
+
+            if score >= min_score:
+                scored.append(KnowledgeChunk(
+                    id=cid,
+                    doc_id=doc_id,
+                    chunk_index=c_idx,
+                    section_title=sec_title or "General",
+                    content=text,
+                    doc_path=path,
+                    doc_title=title,
+                    category=cat,
+                    score=score
+                ))
+
+        scored.sort(key=lambda x: x.score, reverse=True)
+        return scored[:limit]
+
+    def list_documents(self, limit: int = 50) -> list[dict]:
+        with self._lock:
+            rows = self.db.execute("SELECT id, path, title, category, chunk_count, mtime, created FROM documents ORDER BY created DESC LIMIT ?", (limit,)).fetchall()
+        return [{"id": r[0], "path": r[1], "title": r[2], "category": r[3], "chunks": r[4], "mtime": r[5], "created": r[6]} for r in rows]
+
+    def delete_document(self, doc_id: int) -> bool:
+        with self._lock:
+            cids = [r[0] for r in self.db.execute("SELECT id FROM knowledge_chunks WHERE doc_id=?", (doc_id,)).fetchall()]
+            for cid in cids:
+                self.db.execute("DELETE FROM knowledge_vectors WHERE chunk_id=?", (cid,))
+                if self.vec_ok:
+                    self.db.execute("DELETE FROM vec_knowledge WHERE chunk_id=?", (cid,))
+            self.db.execute("DELETE FROM knowledge_chunks WHERE doc_id=?", (doc_id,))
+            self.db.execute("DELETE FROM documents WHERE id=?", (doc_id,))
+            self.db.commit()
+        return True
 
     def rag_context(self, query: str, project: str = "", limit_memories: int = 5) -> dict:
         """Retrieval-Augmented Generation context: combines vector memory search,
-        user preferences, past problem solutions, and knowledge graph project context."""
+        user preferences, past problem solutions, knowledge graph project context,
+        and chunked local document knowledge."""
         if self.private:
-            return {"preferences": [], "solutions": [], "facts": [], "project": None, "formatted": ""}
+            return {"preferences": [], "solutions": [], "facts": [], "knowledge": [], "project": None, "formatted": ""}
 
         # 1. User preferences (always prioritized for personalized alignment)
         prefs = self.preferences(limit=4)
@@ -569,14 +858,23 @@ class MemoryAgent:
         if proj_name:
             proj_data = self.bundle(proj_name)
 
-        # 4. Formatted prompt string for injection
+        # 4. Search chunked knowledge base documents
+        kb_chunks = self.search_knowledge(query, limit=3, min_score=0.2)
+        kb_data = [c.as_dict() for c in kb_chunks]
+
+        # 5. Formatted prompt string for injection
         sections = []
         if pref_texts:
             sections.append("User Preferences:\n" + "\n".join(f"- {p}" for p in pref_texts))
         if solutions:
             sections.append("Past Verified Solutions / Fixes:\n" + "\n".join(f"- {s}" for s in solutions))
         if facts:
-            sections.append("Relevant Context & Knowledge:\n" + "\n".join(f"- {f}" for f in facts[:4]))
+            sections.append("Relevant Context & Memory:\n" + "\n".join(f"- {f}" for f in facts[:4]))
+        if kb_chunks:
+            kb_lines = []
+            for c in kb_chunks:
+                kb_lines.append(f"From '{c.doc_title}' ({c.section_title}):\n{c.content[:400]}")
+            sections.append("Local Document & Code Knowledge:\n" + "\n\n".join(kb_lines))
         if proj_data and proj_data.get("found"):
             proj_info = [f"Project: {proj_data.get('name')}"]
             if proj_data.get("folders"):
@@ -592,6 +890,7 @@ class MemoryAgent:
             "preferences": pref_texts,
             "solutions": solutions,
             "facts": facts,
+            "knowledge": kb_data,
             "project": proj_data,
             "formatted": formatted
         }

@@ -18,6 +18,7 @@ import secrets
 import time
 import urllib.parse
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Optional
 
 from .. import config, intents, timeparse
@@ -385,6 +386,28 @@ class ToolExecutor:
         if name == "query_rag":
             rag = m.rag_context(str(args.get("query", "")), str(args.get("project", "")))
             return ToolResult(rag.get("formatted") or "No relevant RAG context found.")
+        if name == "index_knowledge":
+            target_path = str(args.get("path", "")).strip()
+            cat = str(args.get("category", "")).strip() or "general"
+            p = Path(target_path)
+            if p.is_dir():
+                res = m.ingest_directory(p)
+                msg = f"Indexed directory {p.name}: {res.get('ingested', 0)} files ingested, {res.get('unchanged', 0)} unchanged, {res.get('total_chunks', 0)} chunks total."
+            else:
+                res = m.ingest_file(p, category=cat)
+                if res.get("ok"):
+                    msg = f"Indexed '{res.get('title')}' ({res.get('chunks', 0)} chunks) into vector knowledge base."
+                else:
+                    msg = f"Failed to index: {res.get('error')}"
+            return ToolResult(msg, not res.get("ok", True))
+        if name == "search_knowledge_base":
+            query = str(args.get("query", "")).strip()
+            limit = int(args.get("limit", 5))
+            chunks = m.search_knowledge(query, limit=limit)
+            if not chunks:
+                return ToolResult("No relevant knowledge base chunks found.")
+            lines = [f"- [{c.doc_title} / {c.section_title}] (score {c.score:.2f}):\n{c.content}" for c in chunks]
+            return ToolResult("\n\n".join(lines))
         if name == "verify_action":
             kind = str(args.get("kind", ""))
             target = str(args.get("target", ""))
