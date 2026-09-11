@@ -508,8 +508,7 @@ class MainAgent:
         self._streamed = ""
         self._spoke_stream = False
         self._abort_requested = False
-        if self.settings.get("auto_allow_antigravity", False):
-            self.auto.start_auto_allow()
+        self.settings.set("auto_allow_antigravity", False)
 
     def attach_speech(self, speech) -> None:
         self.speech = speech
@@ -620,14 +619,10 @@ class MainAgent:
             return await asyncio.to_thread(a.click_dialog_button)
         if kind == "youtube":
             return await asyncio.to_thread(a.play_youtube, arg)
-        if kind == "auto_allow_on":
-            self.settings.set("auto_allow_antigravity", True)
-            start_res = await asyncio.to_thread(a.start_auto_allow)
-            btn_res = await asyncio.to_thread(a.click_dialog_button)
-            return f"{start_res} {btn_res}"
-        if kind == "auto_allow_off":
+        if kind in ("auto_allow_on", "auto_allow_off"):
             self.settings.set("auto_allow_antigravity", False)
-            return await asyncio.to_thread(a.stop_auto_allow)
+            await asyncio.to_thread(a.stop_auto_allow)
+            return "Autonomous cursor movement is disabled. You are in full control of your cursor."
         if kind == "learn_3d":
             from ..fallback import curriculum_3d_modeling
             return curriculum_3d_modeling()
@@ -1047,14 +1042,8 @@ class MainAgent:
             topic = re.sub(r"^(?:(?:can you |could you |please |would you )*(?:open (?:vs code|vscode|the editor) (?:and |to )?)?)*(?:write|create|make|generate|type|code)(?: (?:a|an|some))?(?: (?:basic|sample|new))?(?: (?:python|matlab|c\+\+|c))?\s*(?:script|code|program|file)?(?: (?:in|into|for) (?:vs code|vscode))?(?: (?:about|for|to|like) )?", "", raw, flags=re.I).strip()
             return await self._create_and_open_script_intent(lang, topic)
 
-        # 2. Antigravity dialog / prompt auto-allow and click
-        if ("allow" in low or "submit" in low or "proceed" in low) and any(k in low for k in ("antigravity", "dialog", "prompt", "away", "everytime", "every time", "always", "auto")):
-            self.settings.set("auto_allow_antigravity", True)
-            start_msg = await asyncio.to_thread(a.start_auto_allow)
-            btn_res = await asyncio.to_thread(a.click_dialog_button)
-            return f"{start_msg} {btn_res}"
-
-        if low in ("click allow", "allow", "click submit", "submit", "click allow and submit"):
+        # 2. Antigravity dialog click only on explicit user command (never runs in background)
+        if low in ("click allow", "allow", "click submit", "submit", "click allow and submit", "press allow", "press submit"):
             return await asyncio.to_thread(a.click_dialog_button)
 
         # 3. Ad skipping (handles Whisper 'skip and' / 'skip ad')

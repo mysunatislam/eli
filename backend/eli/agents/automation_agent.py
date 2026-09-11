@@ -310,47 +310,17 @@ class AutomationAgent:
                 log.debug("ad-skipper error: %s", e)
 
     def start_auto_allow(self) -> str:
-        if self._auto_allow_thread and self._auto_allow_thread.is_alive():
-            return "Auto-allow for Antigravity is already running."
-        self._auto_allow_stop.clear()
-        self._auto_allow_thread = threading.Thread(target=self._auto_allow_loop, daemon=True, name="eli-auto-allow")
-        self._auto_allow_thread.start()
-        return "I will automatically watch for Antigravity dialogs and click Allow / Submit for you."
+        self._auto_allow_stop.set()
+        return "Autonomous background cursor watcher is disabled to ensure you stay in 100% control of your cursor. Just say 'click allow' or 'click submit' whenever you want me to click a dialog."
 
     def stop_auto_allow(self) -> str:
         self._auto_allow_stop.set()
-        return "Auto-allow for Antigravity has been stopped."
+        return "Auto-allow watcher is stopped."
 
     def _auto_allow_loop(self) -> None:
-        log.info("Antigravity auto-allow watcher started")
-        def is_btn(line) -> bool:
-            txt = line.text.strip()
-            return len(txt) <= 22 and len(txt.split()) <= 4
-
-        while not self._auto_allow_stop.is_set():
-            time.sleep(2.0)
-            if not self.vision:
-                continue
-            try:
-                frame = self.vision.capture_now()
-                lines = frame.ocr()
-                has_prompt = False
-                for l in lines:
-                    if is_btn(l):
-                        low = l.text.strip().lower()
-                        if any(k == low or k in low.split() for k in ("allow", "submit", "proceed", "approve", "confirm")):
-                            has_prompt = True
-                            break
-                        if "yes" in low and any(k in low for k in ("proceed", "continue", "go ahead")):
-                            has_prompt = True
-                            break
-
-                if has_prompt:
-                    res = self.click_dialog_button()
-                    log.info("Auto-allow executed: %s", res)
-                    time.sleep(2.5)
-            except Exception as e:
-                log.debug("auto-allow loop error: %s", e)
+        # Permanently disabled: Eli must NEVER autonomously take over or move the user's mouse cursor.
+        log.info("Auto-allow background watcher is disabled to protect user cursor control.")
+        return
 
     def skip_ad_now(self) -> str:
         ensure_interactive_desktop()
@@ -424,55 +394,73 @@ class AutomationAgent:
         if not self.vision:
             return "Vision agent not available."
 
+        # Save current mouse position so the user's cursor isn't forced or lost
+        orig_pos = None
+        if os.name == "nt":
+            try:
+                user32 = ctypes.windll.user32
+                pt = wintypes.POINT()
+                user32.GetCursorPos(ctypes.byref(pt))
+                orig_pos = (pt.x, pt.y)
+            except Exception:
+                pass
+
         def is_btn(line) -> bool:
             txt = line.text.strip()
             return len(txt) <= 22 and len(txt.split()) <= 4
 
         clicked = []
-        # Phase 1: Check for affirmative options / radio buttons that need selection first
-        option_targets = ["yes, proceed", "yes", "always allow", "allow"]
-        yes_hit = None
-        frame = self.vision.capture_now()
-        for line in frame.ocr():
-            lt = line.text.strip().lower()
-            if is_btn(line) and any(opt == lt or lt.startswith(opt) or opt in lt.split() for opt in option_targets):
-                bx, by, bw, bh = line.box
-                if bw > 0 and bh > 0:
-                    yes_hit = (bx + bw // 2, by + bh // 2, line.text.strip())
-                    break
+        try:
+            # Phase 1: Check for affirmative options / radio buttons that need selection first (e.g. "Yes, allow this time", "Always allow")
+            option_targets = ["yes, allow this time", "always allow", "allow this time", "yes, allow"]
+            yes_hit = None
+            frame = self.vision.capture_now()
+            for line in frame.ocr():
+                lt = line.text.strip().lower()
+                if is_btn(line) and any(opt == lt or lt.startswith(opt) for opt in option_targets):
+                    bx, by, bw, bh = line.box
+                    if bw > 0 and bh > 0:
+                        yes_hit = (bx + bw // 2, by + bh // 2, line.text.strip())
+                        break
 
-        if yes_hit:
-            x, y, text = yes_hit
-            log.info("Found affirmative choice '%s' at (%d, %d); selecting", text, x, y)
-            self.click(x, y)
-            clicked.append(text)
-            time.sleep(0.4)
+            if yes_hit:
+                x, y, text = yes_hit
+                log.info("Found affirmative choice '%s' at (%d, %d); selecting", text, x, y)
+                self.click(x, y)
+                clicked.append(text)
+                time.sleep(0.35)
 
-        # Phase 2: Find and click the Submit / Proceed / Confirm button
-        fresh_frame = self.vision.capture_now()
-        fresh_frame.ocr()
-        submit_keywords = ("submit", "proceed", "confirm", "approve")
-        sub_hit = None
-        for line in fresh_frame.ocr():
-            lt = line.text.strip().lower()
-            if is_btn(line) and any(sk == lt or sk in lt.split() for sk in submit_keywords):
-                bx, by, bw, bh = line.box
-                if bw > 0 and bh > 0:
-                    sub_hit = (bx + bw // 2, by + bh // 2, line.text.strip())
-                    break
+            # Phase 2: Find and click the Submit / Allow button strictly (never click 'proceed' buttons)
+            fresh_frame = self.vision.capture_now()
+            submit_keywords = ("submit", "allow")
+            sub_hit = None
+            for line in fresh_frame.ocr():
+                lt = line.text.strip().lower()
+                if is_btn(line) and any(sk == lt for sk in submit_keywords):
+                    bx, by, bw, bh = line.box
+                    if bw > 0 and bh > 0:
+                        sub_hit = (bx + bw // 2, by + bh // 2, line.text.strip())
+                        break
 
-        if sub_hit:
-            sx, sy, stext = sub_hit
-            log.info("Found submit button '%s' at (%d, %d); clicking", stext, sx, sy)
-            self.click(sx, sy)
-            clicked.append(stext)
-            time.sleep(0.25)
+            if sub_hit:
+                sx, sy, stext = sub_hit
+                log.info("Found submit button '%s' at (%d, %d); clicking", stext, sx, sy)
+                self.click(sx, sy)
+                clicked.append(stext)
+                time.sleep(0.2)
 
-        # Phase 3: Send Enter key only if an affirmative option or submit button was actually clicked
-        if clicked:
-            self.press_keys("enter")
-            return f"Selected and submitted: {' -> '.join(clicked)} (and confirmed with Enter)."
-        return "I checked the screen but didn't find an active Allow, Yes, or Submit button."
+            # Phase 3: Send Enter key only if an affirmative option or submit button was actually clicked
+            if clicked:
+                self.press_keys("enter")
+                return f"Selected and submitted: {' -> '.join(clicked)}."
+            return "I checked the screen but didn't find an active Antigravity Allow or Submit dialog."
+        finally:
+            # Instantly restore cursor to where the user had it
+            if orig_pos and os.name == "nt":
+                try:
+                    ctypes.windll.user32.SetCursorPos(orig_pos[0], orig_pos[1])
+                except Exception:
+                    pass
 
     def compose_email(self, to: str = "", subject: str = "", body: str = "") -> str:
         """Opens a Gmail compose window with fields pre-filled. Never sends."""
