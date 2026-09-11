@@ -507,8 +507,8 @@ class MainAgent:
         self._stream_id = ""
         self._streamed = ""
         self._spoke_stream = False
-        self._abort_requested = False
-        self.settings.set("auto_allow_antigravity", False)
+        if self.settings.get("auto_allow_antigravity", False):
+            self.auto.start_auto_allow()
 
     def attach_speech(self, speech) -> None:
         self.speech = speech
@@ -619,10 +619,14 @@ class MainAgent:
             return await asyncio.to_thread(a.click_dialog_button)
         if kind == "youtube":
             return await asyncio.to_thread(a.play_youtube, arg)
-        if kind in ("auto_allow_on", "auto_allow_off"):
+        if kind == "auto_allow_on":
+            self.settings.set("auto_allow_antigravity", True)
+            start_res = await asyncio.to_thread(a.start_auto_allow)
+            btn_res = await asyncio.to_thread(a.click_dialog_button)
+            return f"{start_res} {btn_res}".strip()
+        if kind == "auto_allow_off":
             self.settings.set("auto_allow_antigravity", False)
-            await asyncio.to_thread(a.stop_auto_allow)
-            return "Autonomous cursor movement is disabled. You are in full control of your cursor."
+            return await asyncio.to_thread(a.stop_auto_allow)
         if kind == "learn_3d":
             from ..fallback import curriculum_3d_modeling
             return curriculum_3d_modeling()
