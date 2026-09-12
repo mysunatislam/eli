@@ -507,6 +507,7 @@ class MainAgent:
         self._stream_id = ""
         self._streamed = ""
         self._spoke_stream = False
+        self._abort_requested = False
         if self.settings.get("auto_allow_antigravity", False):
             self.auto.start_auto_allow()
 
@@ -518,6 +519,28 @@ class MainAgent:
         text = (text or "").strip()
         if not text:
             return ""
+
+        # Immediate interrupt check: if the user says stop, cut speech and cancel IMMEDIATELY without waiting for lock
+        low_t = text.lower().strip().strip(".!?,")
+        is_stop_cmd = (
+            low_t in ("stop", "eli stop", "ellie stop", "elii stop", "stop talking", "stop speaking", "be quiet", "shut up", "pause", "cancel", "abort", "halt", "quiet")
+            or low_t.startswith("eli stop") or low_t.startswith("ellie stop") or low_t.startswith("elii stop")
+            or "stop talking" in low_t or "stop speaking" in low_t or "be quiet" in low_t or "shut up" in low_t
+        )
+        if is_stop_cmd:
+            self._abort_requested = True
+            if self.speech:
+                try:
+                    self.speech.stop_speaking()
+                except Exception:
+                    pass
+            try:
+                self.auto.stop_or_pause_media()
+            except Exception:
+                pass
+            self.hub.set_state("idle")
+            return "Stopped immediately."
+
         async with self.lock:
             self.memory.private = bool(self.settings.get("private_mode"))
             if source == "scheduler":
@@ -534,7 +557,7 @@ class MainAgent:
                 self.hub.set_state("error")
                 reply = f"Something went wrong on my side: {e}"
             reply = (reply or "Done.").strip()
-            if source == "scheduler" and reply.upper().startswith("NO_CHANGE"):
+            if source == "scheduler" and (reply.upper().startswith("NO_CHANGE") or "already running" in reply.lower() or "didn't find" in reply.lower() or "not found" in reply.lower()):
                 self.hub.tool("scheduler", "checked; nothing to report")
                 if self.speech:
                     self.speech.stop_speaking()
