@@ -34,6 +34,7 @@ PATTERNS: list[tuple[str, re.Pattern]] = [
     ("close_window", re.compile(
         r"^(?:please |can you |could you )*(?:close|kill|shut down|exit|quit)(?: (?:the|all))?(?: (?:active|current))?"
         r"(?: (?:window|tab|browser|google chrome|chrome|youtube|videos?|video|vs code|vscode|editor|notepad)(?: (?:and|,)? (?:the )?(?:videos?|tabs?|google chrome|chrome))*)?"
+        r"(?: (?:and|,)? (?:stop|pause)(?: (?:playing|playback))?)?"
         r"(?: (?:you|it|we) played)?[.!]?$", re.I
     )),
     ("click_allow", re.compile(r"^(?:please )?(?:click|press) (?:allow|submit|proceed|yes|confirm|approve)(?: (?:on|for) (?:antigravity|prompt|screen|dialog))?[.!]?$", re.I)),
@@ -201,7 +202,7 @@ def extract_youtube_request(text: str) -> Optional[dict]:
     # Step 3: Strip leading action verbs ("then play the music, ", "play a video of", etc.)
     clean = re.sub(r"^(?:then |and |to )+", "", clean, flags=re.I).strip()
     clean = re.sub(
-        r"^(?:search(?:\s+for)?|play(?:\s+the)?|listen\s+to|find)\s+(?:a |the )?(?:music|song|track|video)?(?:called |of )?[\s,]*",
+        r"^(?:search(?:\s+for)?|play(?:\s+the)?|listen\s+to|find)\s+(?:a |the |some |any )?(?:music|songs?|tracks?|videos?)?\b(?:called |of )?[\s,]*",
         "",
         clean,
         flags=re.I
@@ -211,24 +212,27 @@ def extract_youtube_request(text: str) -> Optional[dict]:
     clean = re.sub(r"(?:\s+(?:and|then|to))?\s*(?:play|watch)(?:\s+(?:a |the )?(?:video|song|track))?(?:\s+(?:of among them|among them|of them|of it|it))?[.!?]?$", "", clean, flags=re.I).strip()
     clean = re.sub(r"(?:\s+(?:on youtube|in chrome|in google chrome|on google|on the web|in browser))+[.!?]?$", "", clean, flags=re.I).strip()
     clean = re.sub(r"\s+(?:and|then|to|please)$", "", clean, flags=re.I).strip()
-    clean = re.sub(r"^(?:a |the )?(?:music |song |track |video )?[\s,]*", "", clean, flags=re.I).strip()
+    clean = re.sub(r"^(?:a |the |some |any )?(?:music|songs?|tracks?|videos?)\b[\s,]*", "", clean, flags=re.I).strip()
     clean = clean.strip(" ,.-'\"")
 
-    # Step 5: Normalize generic requests ("any music", "some music", "music", "song")
-    if not clean or clean in ("youtube", "google", "chrome", "music", "song", "any music", "some music", "a music", "enemy music"):
-        clean = "relaxing music"
+    # Step 5: Check for generic music requests ("youtube music", "any music", "some music", "music", "song")
+    if not clean or clean.lower() in ("youtube", "youtube music", "google", "chrome", "music", "song", "songs", "any music", "some music", "a music", "enemy music", "the music", "a song", "tracks"):
+        return {"query": "", "generic": True, "open_chrome": want_chrome or True}
 
     # Step 6: Strict length & sanity validation
     words = clean.split()
     if len(words) > 7 or any(w in clean for w in ("never", "starts", "talking", "recording", "clicks", "unhinged", "supposed", "submit", "close")):
         return None
 
-    return {"query": clean, "open_chrome": want_chrome or True}
+    return {"query": clean, "generic": False, "open_chrome": want_chrome or True}
 
 
 def extract_browser_search_request(text: str) -> Optional[dict]:
     t = text.lower().strip().strip(".!?,")
-    if any(k in t for k in ("you lie", "you lied", "didn't", "didnt", "why did you", "youtube", "song", "music", "video")):
+    if any(k in t for k in (
+        "you lie", "you lied", "didn't", "didnt", "why did you", "youtube", "song", "music", "video",
+        "close", "shut", "kill", "stop", "pause", "exit", "quit", "cancel", "submit", "allow", "antigravity"
+    )):
         return None
 
     if not any(k in t for k in ("search", "google", "look up", "find", "open chatgpt", "go to chatgpt", "chrome")):
@@ -299,7 +303,20 @@ def match(text: str):
     if any(k in low for k in ("keep going", "keep continuing", "keep monitoring", "till say stop", "until i say stop", "continue monitoring", "keep doing that", "i didnt say stop", "i didn't say stop")):
         return "auto_allow_on", [t]
 
-    # 5. Direct pattern matching
+    # 4. Compound or natural YouTube request (strictly validated before generic PATTERNS)
+    yt_req = extract_youtube_request(t)
+    if yt_req:
+        if yt_req.get("generic"):
+            return "youtube_ask_song", []
+        elif yt_req.get("query"):
+            return "youtube", [yt_req["query"]]
+
+    # 5. Compound or natural browser search request
+    search_req = extract_browser_search_request(t)
+    if search_req and search_req.get("query"):
+        return "browser_search", [search_req["query"]]
+
+    # 6. Direct pattern matching
     for kind, rx in PATTERNS:
         m = rx.match(t)
         if m:
@@ -309,16 +326,6 @@ def match(text: str):
                 if any(delim in arg for delim in (",", ";", " and ", " then ", " click", " type")):
                     continue
             return kind, groups
-
-    # 6. Compound or natural YouTube request (strictly validated)
-    yt_req = extract_youtube_request(t)
-    if yt_req and yt_req.get("query"):
-        return "youtube", [yt_req["query"]]
-
-    # 7. Compound or natural browser search request
-    search_req = extract_browser_search_request(t)
-    if search_req and search_req.get("query"):
-        return "browser_search", [search_req["query"]]
 
     # Robust keyword fallbacks for crucial instructions
     low = t.lower()

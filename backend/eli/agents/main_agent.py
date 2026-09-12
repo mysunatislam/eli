@@ -510,6 +510,7 @@ class MainAgent:
         self._streamed = ""
         self._spoke_stream = False
         self._abort_requested = False
+        self._pending_song_request = False
         if self.settings.get("auto_allow_antigravity", False):
             self.auto.start_auto_allow()
 
@@ -602,6 +603,16 @@ class MainAgent:
 
     # -- routing -----------------------------------------------------------------------------------
     async def _route(self, text: str, source: str) -> str:
+        # Check if Eli was waiting for the user to provide or clarify a song name
+        if self._pending_song_request:
+            self._pending_song_request = False
+            low = text.lower().strip().strip(".!?,")
+            if not any(k in low for k in ("stop", "cancel", "never mind", "nevermind", "abort", "close", "shut")):
+                song = re.sub(r"^(?:play|listen to|i want to listen to|i want|how about|search for|the song|the music|song|music)?\s*", "", text, flags=re.I).strip(" ,.!?\"'")
+                song = song or text.strip()
+                await asyncio.to_thread(self.auto.play_youtube, song)
+                return f"Playing '{song}' for you on YouTube now."
+
         intent = intents.match(text)
         if intent:
             r = await self._run_intent(intent, text)
@@ -659,7 +670,14 @@ class MainAgent:
             return await asyncio.to_thread(a.close_app_or_window, arg)
         if kind == "click_allow":
             return await asyncio.to_thread(a.click_dialog_button)
+        if kind == "youtube_ask_song":
+            self._pending_song_request = True
+            await asyncio.to_thread(a.visual_open_chrome, "https://music.youtube.com")
+            if self.speech and hasattr(self.speech, "wake") and self.speech.wake:
+                self.speech.wake.extend_conversation(60.0)
+            return "I've opened YouTube for you in full screen! Which music or song would you like to listen to?"
         if kind == "youtube":
+            self._pending_song_request = False
             return await asyncio.to_thread(a.play_youtube, arg)
         if kind == "user_complaint_not_playing":
             if any(k in raw.lower() for k in ("unhinged", "recording", "supposed", "talking again", "fluctuated", "sorry", "never clicks", "never opens", "close", "stop")):

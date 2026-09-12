@@ -305,27 +305,111 @@ class AutomationAgent:
         }
         url = urls.get(engine.lower(), urls["google"])
 
-        chrome_paths = [
-            r"C:\Program Files\Google\Chrome\Application\chrome.exe",
-            r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
-            os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe"),
-        ]
-        chrome_exe = next((p for p in chrome_paths if os.path.exists(p)), None)
-        if (open_chrome or engine.lower() == "google") and chrome_exe:
-            try:
-                subprocess.Popen([chrome_exe, url])
-                log.info("Opened Google Chrome with URL: %s", url)
-                time.sleep(0.5)
-                self.activate_chrome()
-                return f"Searched {engine} for '{query}'."
-            except Exception as e:
-                log.warning("Could not launch Chrome executable (%s); falling back to webbrowser", e)
+        if open_chrome or engine.lower() == "google":
+            self.visual_open_chrome(url, query=query)
+            return f"Opened Google Chrome in full screen and searched for '{query}' on Google."
 
         webbrowser.open(url)
         return f"Searched {engine} for '{query}'."
 
-    def activate_chrome(self) -> bool:
-        """Finds any running Google Chrome window, restores it if minimized, and brings it to the foreground."""
+    def visual_open_chrome(self, url: str, query: str = "") -> bool:
+        """Visibly moves the cursor to Google Chrome on taskbar/desktop, launches Chrome detached from Antigravity,
+        brings the browser to the active foreground in full screen (SW_MAXIMIZE), and moves cursor to search bar."""
+        ensure_interactive_desktop()
+        sw, sh = 1920, 1080
+        if os.name == "nt":
+            try:
+                user32 = ctypes.windll.user32
+                sw = user32.GetSystemMetrics(0)
+                sh = user32.GetSystemMetrics(1)
+            except Exception:
+                pass
+
+        # 1. Visual mouse movement to taskbar / Chrome icon
+        target_x = sw // 2 - 60
+        target_y = sh - 24
+        if self.vision:
+            try:
+                hit = self.vision.find_text("Chrome")
+                if hit:
+                    target_x, target_y = hit[0], hit[1]
+            except Exception:
+                pass
+
+        try:
+            self.move_mouse(target_x, target_y)
+            time.sleep(0.15)
+            self.click(target_x, target_y)
+            time.sleep(0.2)
+        except Exception as e:
+            log.debug("visual mouse taskbar move failed: %s", e)
+
+        # 2. Chrome executable path
+        chrome_candidates = [
+            r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+            r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+            os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe")
+        ]
+        chrome_exe = next((p for p in chrome_candidates if os.path.exists(p)), None)
+
+        # Clean up orphaned headless chrome processes with no visible windows
+        if os.name == "nt":
+            try:
+                import psutil
+                chrome_procs = [p for p in psutil.process_iter(['name', 'pid']) if p.info['name'] and 'chrome' in p.info['name'].lower()]
+                if chrome_procs and gw is not None:
+                    wins = [w for w in gw.getAllWindows() if "chrome" in (w.title or "").lower() or "youtube" in (w.title or "").lower()]
+                    if not wins and len(chrome_procs) > 6:
+                        log.info("Found %d headless zombie chrome processes without GUI window; cleaning up", len(chrome_procs))
+                        for p in chrome_procs:
+                            try:
+                                p.kill()
+                            except Exception:
+                                pass
+                        time.sleep(0.4)
+            except Exception as e:
+                log.debug("chrome zombie check error: %s", e)
+
+        # 3. Launch detached via Windows Shell (cmd /c start or explorer) so Antigravity closing never terminates Chrome
+        opened = False
+        if chrome_exe:
+            try:
+                subprocess.Popen(
+                    ["cmd.exe", "/c", "start", "", chrome_exe, "--start-maximized", "--new-window", url],
+                    stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+                )
+                opened = True
+                log.info("Launched Google Chrome detached via Windows shell: %s", url)
+            except Exception as e:
+                log.debug("cmd start failed: %s; trying explorer", e)
+                try:
+                    subprocess.Popen(["explorer.exe", url], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    opened = True
+                except Exception:
+                    pass
+
+        if not opened:
+            try:
+                webbrowser.open(url)
+            except Exception:
+                pass
+
+        # 4. Bring window to active foreground in full screen (SW_MAXIMIZE)
+        time.sleep(0.8)
+        self.activate_chrome(maximize=True)
+
+        # 5. Visually glide cursor smoothly to Chrome's search / address bar
+        try:
+            search_x = sw // 2
+            search_y = 130
+            self.move_mouse(search_x, search_y)
+        except Exception:
+            pass
+
+        return True
+
+    def activate_chrome(self, maximize: bool = True) -> bool:
+        """Finds any running Google Chrome window, restores/maximizes it into full screen, and brings it to the foreground."""
         try:
             user32 = ctypes.windll.user32
             found_hwnds = []
@@ -342,14 +426,27 @@ class AutomationAgent:
             user32.EnumWindows(WNDENUMPROC(enum_cb), 0)
 
             if found_hwnds:
-                self._force_foreground(found_hwnds[0])
-                log.info("Force activated Google Chrome window hwnd=%d to foreground", found_hwnds[0])
+                hwnd = found_hwnds[0]
+                self._force_foreground(hwnd, maximize=maximize)
+                log.info("Force activated Google Chrome window hwnd=%d to foreground (maximized=%s)", hwnd, maximize)
                 return True
         except Exception as e:
             log.debug("activate_chrome failed: %s", e)
         try:
-            self.focus_window("Google Chrome")
-            return True
+            if gw is not None:
+                for w in gw.getAllWindows():
+                    t = (w.title or "").lower()
+                    if "chrome" in t or "youtube" in t:
+                        if w.isMinimized:
+                            w.restore()
+                        if maximize:
+                            try:
+                                w.maximize()
+                            except Exception:
+                                pass
+                        w.activate()
+                        self._force_foreground(w._hWnd, maximize=maximize)
+                        return True
         except Exception:
             pass
         return False
@@ -358,7 +455,7 @@ class AutomationAgent:
         clean = re.sub(r"^(?:play|search for|listen to|play music|play the music|the music|music|the song|song|a music|a video of among them|video of among them|video|video of)\s+", "", query, flags=re.I).strip()
         clean = re.sub(r"\s+(?:and play a video of among them|and play a video|and play it|and play|please|video)$", "", clean, flags=re.I).strip()
         clean = clean or query
-        if not clean or clean.lower() in ("music", "song", "youtube", "relaxing music", "any music", "some music", "enemy music", "a music"):
+        if not clean or clean.lower() in ("music", "song", "youtube", "relaxing music", "any music", "some music", "enemy music", "a music", "youtube music"):
             clean = "relaxing music"
 
         # 1. Resolve direct YouTube watch URL so playback actually starts
@@ -376,32 +473,12 @@ class AutomationAgent:
         except Exception as e:
             log.debug("youtube video id scrape fallback: %s", e)
 
-        # 2. Launch directly in Google Chrome if installed, else fallback to default browser
-        chrome_candidates = [
-            r"C:\Program Files\Google\Chrome\Application\chrome.exe",
-            r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
-            os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe")
-        ]
-        opened = False
-        for cpath in chrome_candidates:
-            if os.path.exists(cpath):
-                try:
-                    subprocess.Popen([cpath, watch_url])
-                    opened = True
-                    log.info("Opened Google Chrome at %s with URL: %s", cpath, watch_url)
-                    break
-                except Exception as ex:
-                    log.debug("chrome launch error: %s", ex)
-        if not opened:
-            webbrowser.open(watch_url)
-
-        # 3. Bring Chrome to foreground
-        time.sleep(0.6)
-        self.activate_chrome()
+        # 2. Launch directly in Google Chrome with visual mouse glide, detached from Antigravity
+        self.visual_open_chrome(watch_url, query=clean)
 
         if auto_skip_ads:
             self.start_ad_skipper(duration=360.0)
-        return f"Opened Google Chrome and started playing '{clean}' on YouTube."
+        return f"Opened Google Chrome in full screen and started playing '{clean}' on YouTube."
 
     def start_ad_skipper(self, duration: float = 360.0) -> None:
         if self._ad_skip_thread and self._ad_skip_thread.is_alive():
@@ -763,7 +840,7 @@ class AutomationAgent:
         except Exception as e:
             return f"Couldn't focus '{w.title}': {e}"
 
-    def _force_foreground(self, hwnd: int) -> None:
+    def _force_foreground(self, hwnd: int, maximize: bool = False) -> None:
         user32 = ctypes.windll.user32
         kernel32 = ctypes.windll.kernel32
         cur_tid = kernel32.GetCurrentThreadId()
@@ -774,7 +851,8 @@ class AutomationAgent:
         user32.AttachThreadInput(cur_tid, fg_tid, True)
         user32.AttachThreadInput(cur_tid, target_tid, True)
 
-        user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+        cmd_show = 3 if maximize else 9  # SW_MAXIMIZE = 3, SW_RESTORE = 9
+        user32.ShowWindow(hwnd, cmd_show)
         HWND_TOPMOST = -1
         HWND_NOTOPMOST = -2
         SWP_NOMOVE = 0x0002
