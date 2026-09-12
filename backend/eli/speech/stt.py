@@ -7,9 +7,40 @@ from typing import Optional
 
 import numpy as np
 
+import re
+
 log = logging.getLogger("eli.stt")
 
 RATE = 16000
+
+
+def normalize_speech_text(text: str) -> str:
+    """Corrects common Whisper phonetic mishearings and accent artifacts."""
+    if not text:
+        return ""
+    t = text.strip()
+    # 1. Fix "meal code", "meal file", "meal script", "meal project", etc. -> "new ..."
+    t = re.sub(r"\b(?:meal|nail|kneel|milk|mail|neat|deal)\s+(code|script|file|folder|project|python|program|window)\b", r"new \1", t, flags=re.I)
+    t = re.sub(r"\b(write|create|make|open)\s+(?:a\s+)?(?:meal)\s+(code|script|file|program)\b", r"\1 a new \2", t, flags=re.I)
+    t = re.sub(r"\bmeal\s+file\b", "new file", t, flags=re.I)
+    t = re.sub(r"\bmeal\s+code\b", "new code", t, flags=re.I)
+    t = re.sub(r"\bmeal\s+script\b", "new script", t, flags=re.I)
+
+    # 2. Fix "the vs code" / "the vscode" -> "VS Code"
+    t = re.sub(r"\bthe\s+vs\s+code\b", "VS Code", t, flags=re.I)
+    t = re.sub(r"\bthe\s+vscode\b", "VS Code", t, flags=re.I)
+
+    # 3. Fix "happy elli" / "happy eli" -> "hello eli"
+    t = re.sub(r"\bhappy\s+el+[ieya]+\b", "hello eli", t, flags=re.I)
+
+    # 4. Fix "skip and" -> "skip ad"
+    t = re.sub(r"\bskip\s+and\b", "skip ad", t, flags=re.I)
+
+    # 5. Fix "Antigravity us" -> "Antigravity asks"
+    t = re.sub(r"\bantigravity\s+(?:us|is)\b", "Antigravity asks", t, flags=re.I)
+
+    t = re.sub(r"\s+", " ", t).strip()
+    return t
 
 
 class Transcriber:
@@ -37,8 +68,9 @@ class Transcriber:
         return self._model is not None
 
     INITIAL_PROMPT = (
-        "Eli, Ellie, Elli. Hey Eli, Hey Ellie, Hey Elli. "
-        "Hello Eli, Hello Ellie, Hello Elli, Hi Eli. Yes, Eli. Open VS Code, YouTube, Python."
+        "Eli, Ellie, Elli. Hey Eli, Hello Eli, Hi Eli. "
+        "Open VS Code, write code, new code, new script, new file, python script, "
+        "check errors, diagnose code, Antigravity, submit, allow, terminal."
     )
 
     def transcribe(self, audio: np.ndarray) -> str:
@@ -54,7 +86,8 @@ class Transcriber:
             no_speech_threshold=0.6,
             initial_prompt=self.INITIAL_PROMPT,
         )
-        return " ".join(s.text.strip() for s in segments).strip()
+        raw_text = " ".join(s.text.strip() for s in segments).strip()
+        return normalize_speech_text(raw_text)
 
 
 class Recorder:

@@ -522,15 +522,29 @@ class MainAgent:
         if not text:
             return ""
 
-        # Immediate interrupt check: if the user says stop, cut speech and cancel IMMEDIATELY without waiting for lock
+        # Immediate interrupt check: if the user says stop talking, cut speech immediately without cancelling background tasks
         low_t = text.lower().strip().strip(".!?,")
         is_keep_going = any(k in low_t for k in ("keep going", "continue", "till", "until", "don't stop", "dont stop", "didn't say stop", "didnt say stop", "keep monitoring", "keep continuing"))
-        is_stop_cmd = not is_keep_going and (
-            low_t in ("stop", "eli stop", "ellie stop", "elii stop", "stop talking", "stop speaking", "be quiet", "shut up", "pause", "cancel", "abort", "halt", "quiet")
-            or low_t.startswith("eli stop") or low_t.startswith("ellie stop") or low_t.startswith("elii stop")
+        is_stop_talking = not is_keep_going and (
+            low_t in ("stop", "eli stop", "ellie stop", "elii stop", "stop eli", "stop ellie", "stop talking", "stop speaking", "be quiet", "shut up", "pause", "quiet", "silence", "hush")
             or "stop talking" in low_t or "stop speaking" in low_t or "be quiet" in low_t or "shut up" in low_t
         )
-        if is_stop_cmd:
+        is_abort_task = not is_keep_going and (
+            low_t in ("cancel the task", "stop the task", "abort", "halt", "cancel task", "stop all tasks", "cancel all tasks", "cancel everything", "stop working")
+            or "stop the task" in low_t or "cancel the task" in low_t or "stop all tasks" in low_t
+        )
+        if is_stop_talking and not is_abort_task:
+            if self.speech:
+                try:
+                    self.speech.stop_speaking()
+                except Exception:
+                    pass
+            self.hub.transcript("user", text, source)
+            self.hub.transcript("eli", "Stopped speaking.", source)
+            self.hub.toast("Stopped speaking.")
+            self.hub.set_state("idle")
+            return "Stopped speaking."
+        elif is_abort_task:
             self._abort_requested = True
             if self.speech:
                 try:
@@ -541,8 +555,10 @@ class MainAgent:
                 self.auto.stop_or_pause_media()
             except Exception:
                 pass
+            self.hub.transcript("user", text, source)
+            self.hub.transcript("eli", "Task stopped immediately.", source)
             self.hub.set_state("idle")
-            return "Stopped immediately."
+            return "Task stopped immediately."
         else:
             self._abort_requested = False
 
@@ -584,7 +600,7 @@ class MainAgent:
         else:
             self.hub.set_state("idle")
         if source == "voice" and self.speech and hasattr(self.speech, "wake") and self.speech.wake:
-            self.speech.wake.extend_conversation(15.0)
+            self.speech.wake.extend_conversation(60.0)
 
     # -- routing -----------------------------------------------------------------------------------
     async def _route(self, text: str, source: str) -> str:
@@ -658,7 +674,12 @@ class MainAgent:
             self.settings.set("auto_allow_antigravity", False)
             return await asyncio.to_thread(a.stop_auto_allow)
         if kind == "greeting":
-            return "Hello! I'm Eli. How can I help you today?"
+            return "Hello! I'm here with you, go ahead."
+        if kind == "stop_speech":
+            if self.speech:
+                self.speech.stop_speaking()
+            self.hub.set_state("idle")
+            return "Stopped talking."
         if kind == "vscode_check_code":
             return await asyncio.to_thread(self.coding.inspect_and_diagnose_vscode, self.auto, self.vision)
         if kind == "learn_3d":
@@ -693,6 +714,13 @@ class MainAgent:
         if kind == "write_code":
             lang = groups[0].lower() if groups and groups[0] else "python"
             topic = groups[1] if len(groups) > 1 and groups[1] else "Hello World"
+            return await self._create_and_open_script_intent(lang, topic)
+        if kind == "write_code_compound":
+            lang = "python"
+            topic = "script with errors" if any("error" in (g or "").lower() or "bug" in (g or "").lower() for g in groups) else "sample script"
+            for g in groups:
+                if g and g.lower() in ("python", "matlab", "c++", "c", "javascript"):
+                    lang = g.lower()
             return await self._create_and_open_script_intent(lang, topic)
         if kind == "open":
             key = normalize_app(arg)
@@ -735,7 +763,16 @@ class MainAgent:
             self.memory.private = False
             self.hub.status(private_mode=False)
             return "Private mode off. I'm back."
-        if kind in ("stop_all", "stop_talking"):
+        if kind == "stop_speech":
+            if self.speech:
+                try:
+                    self.speech.stop_speaking()
+                except Exception:
+                    pass
+            self.hub.set_state("idle")
+            self.hub.toast("Stopped speaking.")
+            return "Stopped speaking."
+        if kind == "stop_all":
             self._abort_requested = True
             if self.speech:
                 self.speech.stop_speaking()
@@ -827,17 +864,25 @@ class MainAgent:
         # Dismiss any stuck file dialogs first (e.g. Create File / Save As modals)
         await asyncio.to_thread(self.auto.dismiss_interferences)
 
-        filename = "hello_world.py"
+        has_errors_req = any(k in topic.lower() for k in ("error", "errors", "bug", "bugs", "fault", "broken", "syntax error"))
+        filename = "sample_code_with_errors.py" if has_errors_req else "hello_world.py"
         code = ""
         if self.llm.available:
-            prompt = (
-                f"Write a complete, high-quality, production-grade {lang} script for: '{topic or 'Hello World and core utility demonstration'}'. "
-                "Include clean modular functions, type hints, docstrings, error handling, and an if __name__ == '__main__': block. "
-                f"Output ONLY the complete source code inside ```{lang} ... ``` code fences."
-            )
+            if has_errors_req:
+                prompt = (
+                    f"Write a {lang} script that contains realistic, intentional errors (such as an undefined variable, a Type error, or an off-by-one/ZeroDivision error) so the user can inspect and diagnose them in VS Code. "
+                    "Make the code look like a genuine application script with functions. "
+                    f"Output ONLY the source code inside ```{lang} ... ``` code fences."
+                )
+            else:
+                prompt = (
+                    f"Write a complete, high-quality, production-grade {lang} script for: '{topic or 'Hello World and core utility demonstration'}'. "
+                    "Include clean modular functions, type hints, docstrings, error handling, and an if __name__ == '__main__': block. "
+                    f"Output ONLY the complete source code inside ```{lang} ... ``` code fences."
+                )
             try:
                 r = await self.llm.complete(
-                    ("You are an elite software engineer. Write clean, elegant, tested, robust code.", ""),
+                    ("You are an expert software engineer creating code scripts for the user.", ""),
                     [{"role": "user", "parts": [text_part(prompt)]}],
                     []
                 )
@@ -853,7 +898,7 @@ class MainAgent:
         if not code:
             gen_filename, code = self.coding.generate_code_offline(topic, lang)
             filename = gen_filename
-        elif topic and topic.strip():
+        elif topic and topic.strip() and not has_errors_req:
             clean_name = re.sub(r'[^a-zA-Z0-9_]', '_', topic.lower().strip())[:30].strip('_')
             if clean_name:
                 ext = ".m" if lang == "matlab" else ".py"
@@ -864,13 +909,14 @@ class MainAgent:
             filename=filename,
             code=code,
             language=lang,
-            run_after=True
+            run_after=not has_errors_req
         )
-        return (
-            f"I have created `{res.get('filename')}` at `{res.get('path')}`, "
-            f"verified syntax ({res.get('syntax_note')}), tested execution ({res.get('execution_output', '')[:80]}), "
-            "and opened it directly in VS Code!"
-        )
+        msg = f"I opened VS Code and created `{res.get('filename')}` at `{res.get('path')}`."
+        if has_errors_req:
+            msg += " It contains sample errors for you to inspect. Would you like me to analyze and diagnose the errors for you?"
+        else:
+            msg += f" Verified syntax ({res.get('syntax_note')}) and opened it directly in an editor tab."
+        return msg
 
     # -- LLM turn ----------------------------------------------------------------------------------
     async def _llm_turn(self, text: str) -> str:
@@ -1051,8 +1097,15 @@ class MainAgent:
         low = raw.lower()
         a, c, m, v = self.auto, self.coding, self.memory, self.vision
 
-        # 0. Immediate stop / abort command
-        if any(k in low for k in ("stop the task", "stop working", "stop it", "stop that", "cancel the task", "abort", "halt")) or low in ("stop", "cancel"):
+        # 0. Immediate stop speaking command (cuts speech only; preserves background tasks & auto-allow)
+        if low in ("stop", "eli stop", "ellie stop", "stop eli", "stop ellie", "stop talking", "stop speaking", "be quiet", "shut up", "quiet", "silence", "hush"):
+            if self.speech:
+                self.speech.stop_speaking()
+            self.hub.set_state("idle")
+            return "Stopped talking."
+
+        # 0a. Task abort command
+        if any(k in low for k in ("stop the task", "stop working", "stop that", "cancel the task", "abort", "halt", "stop all tasks", "cancel all tasks", "cancel everything")):
             self._abort_requested = True
             if self.speech:
                 self.speech.stop_speaking()
@@ -1062,11 +1115,11 @@ class MainAgent:
             if self.executor.scheduler:
                 self.executor.scheduler.cancel_all()
             self.hub.set_state("idle")
-            return "Stopped immediately. I have halted all active tasks, watchers, and speech."
+            return "Task stopped immediately."
 
         # 0b. Greeting
         if low in ("hello", "hey", "hi", "howdy", "good morning", "good afternoon", "good evening", "hello ellie", "hello eli", "hey eli", "hey ellie"):
-            return "Hello! I'm Eli. How can I help you today?"
+            return "Hello! I'm here with you, go ahead."
 
         # 1. Deterministic intents (auto-allow, media, 3d, skip ad, ide, etc.)
         intent = intents.match(raw)

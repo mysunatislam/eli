@@ -13,7 +13,9 @@ WAKE_PREFIX = re.compile(
 
 
 def strip_wake(text: str) -> str:
-    return WAKE_PREFIX.sub("", text.strip())
+    from .speech.stt import normalize_speech_text
+    norm = normalize_speech_text(text)
+    return WAKE_PREFIX.sub("", norm.strip())
 
 
 PATTERNS: list[tuple[str, re.Pattern]] = [
@@ -66,11 +68,23 @@ PATTERNS: list[tuple[str, re.Pattern]] = [
     ("observe_off", re.compile(
         r"^(?:turn off|disable|stop) (?:screen )?(?:observation|observing|watching|screen capture|seeing|vision)[.!]?$"
         r"|^(?:stop|don'?t) (?:watching|looking at|observing) my screen[.!]?$", re.I)),
+    ("stop_speech", re.compile(
+        r"^(?:please )?(?:eli,? )?(?:stop|stop talking|stop speaking|be quiet|shut up|quiet|silence|hush|stop eli|eli stop|ellie stop|stop ellie)[.!]?$", re.I
+    )),
     ("stop_all", re.compile(
-        r"^(?:please )?(?:stop(?: the)?(?: task| working| it| that| everything| immediately)?|"
+        r"^(?:please )?(?:stop(?: the)? (?:task|working|all tasks)|"
         r"stop whatever (?:you are|it is) (?:working(?: on)?|doing)|"
-        r"cancel(?: the)?(?: task| it| everything)?|abort|halt|stop all(?: tasks)?|"
-        r"stop|be quiet|shut up|silence|stop talking)[.!]?$", re.I)),
+        r"cancel(?: the)?(?: task| everything)?|abort|halt)[.!]?$", re.I
+    )),
+    ("write_code_compound", re.compile(
+        r"^(?:(?:can you |could you |please |would you )*(?:open (?:the )?(?:vs code|vscode|the editor|editor) (?:and |to )?)?)*"
+        r"(?:write|create|start writing|make|generate|type|code)(?: and open)?(?: (?:the|a|an|some))?\s*"
+        r"(?:new |sample |basic |original )?(python|matlab|c\+\+|c|javascript|web)?\s*"
+        r"(?:script|code|program|file)?\s*"
+        r"(?:and (?:write|create|make|type|generate) (?:a |some )?(?:new )?(?:code|script|program|file))?\s*"
+        r"(?:.*?(error|errors|bug|bugs|problem|broken|syntax error|with error|with errors))?[.!?]?$",
+        re.I
+    )),
     ("follow_on", re.compile(r"^(?:follow me|follow my (?:cursor|mouse)|come with me|stay with me|follow mode(?: on)?|start following(?: me)?)[.!]?$", re.I)),
     ("follow_off", re.compile(r"^(?:stay here|stay there|stay put|stop following(?: me)?|don'?t follow me|follow mode off)[.!]?$", re.I)),
     ("trust_on", re.compile(
@@ -133,9 +147,11 @@ PREF_RE = re.compile(
 
 
 def match(text: str):
-    t = strip_wake(text).strip()
+    from .speech.stt import normalize_speech_text
+    clean_text = normalize_speech_text(text)
+    t = strip_wake(clean_text).strip()
     if not t:
-        if re.search(r"\b(hello|hey|hi|good morning|good evening|howdy|yo|[iea]+l+[ieya]+|allie|ali|ally)\b", text, re.I):
+        if re.search(r"\b(hello|hey|hi|good morning|good evening|howdy|yo|[iea]+l+[ieya]+|allie|ali|ally)\b", clean_text, re.I):
             return "greeting", []
         return None
     for kind, rx in PATTERNS:

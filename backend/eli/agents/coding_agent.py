@@ -430,6 +430,31 @@ class CodingAgent:
                 'if __name__ == "__main__":\n'
                 '    main()\n'
             )
+        elif any(k in low for k in ("error", "errors", "bug", "bugs", "fault", "broken", "syntax error")):
+            filename = "sample_code_with_errors.py"
+            code = (
+                '"""\n'
+                'Sample Python Script with Intentional Errors for Inspection & Debugging\n'
+                'Created by Eli Autonomous Desktop Companion\n'
+                '"""\n\n'
+                'def calculate_total(prices, tax_rate):\n'
+                '    total = 0\n'
+                '    for price in prices:\n'
+                '        total += price\n'
+                '    # Intentional Error 1: Reference to undefined variable discount\n'
+                '    subtotal = total - discount\n'
+                '    # Intentional Error 2: TypeError adding string to float\n'
+                '    final_amount = subtotal + "tax"\n'
+                '    return final_amount\n\n'
+                'def process_items(items):\n'
+                '    # Intentional Error 3: ZeroDivisionError on empty list\n'
+                '    return sum(items) / len(items)\n\n'
+                'if __name__ == "__main__":\n'
+                '    print("Running sample calculation...")\n'
+                '    prices = [19.99, 45.50, 12.00]\n'
+                '    result = calculate_total(prices, 0.08)\n'
+                '    print("Result:", result)\n'
+            )
         elif any(k in low for k in ("prime", "sieve", "primes")):
             filename = "prime_numbers.py"
             code = (

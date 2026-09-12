@@ -26,6 +26,12 @@ KNOWN_NAMES = {
     "inlet", "i lie", "i lay"
 }
 
+STOP_WORDS = (
+    "stop", "eli stop", "stop eli", "ellie stop", "stop ellie",
+    "stop talking", "stop speaking", "be quiet", "shut up", "quiet",
+    "pause", "cancel", "hush", "silence"
+)
+
 
 def match_wake(text: str, wake_words) -> tuple[bool, str]:
     t = re.sub(r"[^a-z0-9' ]", " ", text.lower())
@@ -71,10 +77,16 @@ class WakeListener(threading.Thread):
         self.wake_words = wake_words
         self._stop = threading.Event()
         self._paused = threading.Event()
-        self._followup_until = 0.0
+        self._awake_until = 0.0
+        self._was_awake = False
 
-    def extend_conversation(self, seconds: float = 12.0) -> None:
-        self._followup_until = time.time() + seconds
+    def extend_conversation(self, seconds: float = 60.0) -> None:
+        """Keeps Eli awake for uninterrupted back-and-forth conversation (default 60s)."""
+        self._awake_until = time.time() + max(seconds, 60.0)
+        self._was_awake = True
+
+    def is_awake(self) -> bool:
+        return time.time() < self._awake_until
 
     def pause(self) -> None:
         self._paused.set()
@@ -85,45 +97,94 @@ class WakeListener(threading.Thread):
     def stop(self) -> None:
         self._stop.set()
 
-    def _active(self) -> bool:
-        return bool(self.settings.get("wake_enabled")) and self.c.recorder is not None \
-            and not self._paused.is_set() and not self.c.tts.speaking and not self.c.recording
-
     def run(self) -> None:
         while not self._stop.is_set():
-            if not self._active():
+            if not bool(self.settings.get("wake_enabled")) or self.c.recorder is None or self._paused.is_set():
                 time.sleep(0.3)
                 continue
+
+            # --- 1. Vocal Barge-In: Active while Eli is speaking ---
+            if self.c.tts.speaking:
+                try:
+                    # Rapid mic capture during speech to catch 'stop', 'eli stop', 'be quiet'
+                    audio = self.c.recorder.record(max_seconds=1.2, silence_seconds=0.5, min_seconds=0.25, wait_timeout=0.6)
+                    if audio.size >= 16000 * 0.25:
+                        text = self.c.transcriber.transcribe(audio)
+                        low = text.lower().strip().strip(".!?,")
+                        is_stop = any(w in low for w in STOP_WORDS)
+                        if is_stop:
+                            log.info("Vocal barge-in STOP detected during speech: %r. Cutting speech.", text)
+                            self.c.stop_speaking()
+                            self.hub.toast("Stopped speaking.")
+                            self.hub.set_state("idle")
+                            time.sleep(0.3)
+                            continue
+                except Exception as e:
+                    log.debug("barge-in mic check error: %s", e)
+                    time.sleep(0.2)
+                continue
+
+            # Don't record if push-to-talk or another recording is in progress
+            if self.c.recording:
+                time.sleep(0.2)
+                continue
+
+            now = time.time()
+            awake = now < self._awake_until
+
+            # Check for transition: awake -> standby timeout (60 seconds elapsed without user voice)
+            if not awake and self._was_awake:
+                self._was_awake = False
+                log.info("Continuous conversation 60s window timed out. Returning to silent standby.")
+                self.hub.toast("Eli is on standby. Say 'Hello Eli' anytime.")
+                self.hub.set_state("idle")
+
             try:
-                # Fast wake capture: 6.0s max, 1.2s silence break, 3.5s wait timeout
-                audio = self.c.recorder.record(max_seconds=6.0, silence_seconds=1.2, wait_timeout=3.5)
+                if awake:
+                    # Continuous conversation capture: generous 2.0s silence break, up to 25.0s max for long sentences
+                    self.hub.set_state("listening")
+                    self.hub.status(mic_live=True)
+                    audio = self.c.recorder.record(max_seconds=25.0, silence_seconds=2.0, min_seconds=0.4, wait_timeout=3.0)
+                else:
+                    # Standby wake-word capture: shorter window, waiting for wake phrase
+                    audio = self.c.recorder.record(max_seconds=6.0, silence_seconds=1.2, min_seconds=0.3, wait_timeout=3.0)
             except Exception as e:
                 log.warning("wake listener mic error: %s", e)
-                time.sleep(1)
+                time.sleep(0.5)
                 continue
-            if audio.size < 16000 * 0.20 or not self._active():
+            finally:
+                if not awake:
+                    self.hub.status(mic_live=False)
+
+            if audio.size < 16000 * 0.25:
                 continue
+
             text = self.c.transcriber.transcribe(audio)
             if not text:
                 continue
+
             hit, rest = match_wake(text, self.wake_words)
-            if not hit and time.time() < self._followup_until and len(text.split()) >= 1:
+
+            if awake:
+                # While awake, any speech is accepted as a conversational command
                 hit = True
-                rest = text.strip()
-                log.info("Continuous conversational follow-up accepted: %r", text)
+                cmd = rest.strip() if (match_wake(text, self.wake_words)[0] and rest.strip()) else text.strip()
+                log.info("Awake conversational turn received: %r", cmd)
+            else:
+                if not hit:
+                    # In standby mode, ignore casual room chatter that doesn't start with Eli
+                    log.debug("Standby ignored non-wake speech: %r", text)
+                    continue
+                cmd = rest.strip() if rest.strip() else text.strip()
 
-            log.info("wake heard: %r -> hit=%s rest=%r", text, hit, rest)
-            if not hit:
-                continue
-
-            self._followup_until = time.time() + 15.0
+            # Keep awake for another 60 seconds from this utterance
+            self._awake_until = time.time() + 60.0
+            self._was_awake = True
             self.c.recording = True
+
             try:
-                # Turn mic ON visually in UI immediately & set state to listening
                 self.hub.set_state("listening")
                 self.hub.status(mic_live=True)
-
-                cmd = rest.strip() if rest.strip() else text.strip()
                 log.info("dispatching voice command: %r", cmd)
                 self.hub.toast(f'Heard: "{cmd}"')
                 self.c.dispatch(cmd, "voice")
