@@ -268,7 +268,18 @@ function startBackend() {
   log('backend starting:', pythonExe, 'cwd', backendDir);
 }
 function stopBackend() {
-  if (backendProc) { try { backendProc.kill(); } catch (_) { /* ignore */ } backendProc = null; }
+  log('stopping backend...');
+  try {
+    http.get(`${BACKEND_HTTP}/api/quit`, { timeout: 1000 }, (res) => { res.resume(); });
+  } catch (_) {}
+  if (backendProc && backendProc.pid) {
+    try {
+      const { execSync } = require('child_process');
+      execSync(`taskkill /F /T /PID ${backendProc.pid}`, { stdio: 'ignore' });
+    } catch (_) {}
+    try { backendProc.kill(); } catch (_) {}
+    backendProc = null;
+  }
 }
 
 // ---------- first-run onboarding (packaged app only) ------------------------------------------------------
@@ -557,6 +568,6 @@ app.on('second-instance', () => {
   bringHere();
   sendShortcut('toggle-panel');
 });
-app.on('before-quit', () => { quitting = true; });
+app.on('before-quit', () => { quitting = true; stopBackend(); });
 app.on('will-quit', () => { quitting = true; globalShortcut.unregisterAll(); stopBackend(); });
-app.on('window-all-closed', () => app.quit());
+app.on('window-all-closed', () => { stopBackend(); app.quit(); });

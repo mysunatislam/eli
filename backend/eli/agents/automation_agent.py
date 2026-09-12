@@ -15,6 +15,7 @@ import subprocess
 import threading
 import time
 import urllib.parse
+import urllib.request
 import webbrowser
 from pathlib import Path
 from typing import Optional
@@ -294,7 +295,7 @@ class AutomationAgent:
         webbrowser.open(url)
         return f"Opened {url}."
 
-    def web_search(self, query: str, engine: str = "google") -> str:
+    def web_search(self, query: str, engine: str = "google", open_chrome: bool = False) -> str:
         q = urllib.parse.quote_plus(query)
         urls = {
             "google": f"https://www.google.com/search?q={q}",
@@ -303,18 +304,104 @@ class AutomationAgent:
             "duckduckgo": f"https://duckduckgo.com/?q={q}",
         }
         url = urls.get(engine.lower(), urls["google"])
+
+        chrome_paths = [
+            r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+            r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+            os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe"),
+        ]
+        chrome_exe = next((p for p in chrome_paths if os.path.exists(p)), None)
+        if (open_chrome or engine.lower() == "google") and chrome_exe:
+            try:
+                subprocess.Popen([chrome_exe, url])
+                log.info("Opened Google Chrome with URL: %s", url)
+                time.sleep(0.5)
+                self.activate_chrome()
+                return f"Searched {engine} for '{query}'."
+            except Exception as e:
+                log.warning("Could not launch Chrome executable (%s); falling back to webbrowser", e)
+
         webbrowser.open(url)
         return f"Searched {engine} for '{query}'."
 
+    def activate_chrome(self) -> bool:
+        """Finds any running Google Chrome window, restores it if minimized, and brings it to the foreground."""
+        try:
+            user32 = ctypes.windll.user32
+            found_hwnds = []
+
+            def enum_cb(hwnd, extra):
+                if user32.IsWindowVisible(hwnd):
+                    cls_name = ctypes.create_unicode_buffer(256)
+                    user32.GetClassNameW(hwnd, cls_name, 256)
+                    if cls_name.value == "Chrome_WidgetWin_1":
+                        found_hwnds.append(hwnd)
+                return True
+
+            WNDENUMPROC = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_int, ctypes.c_int)
+            user32.EnumWindows(WNDENUMPROC(enum_cb), 0)
+
+            if found_hwnds:
+                self._force_foreground(found_hwnds[0])
+                log.info("Force activated Google Chrome window hwnd=%d to foreground", found_hwnds[0])
+                return True
+        except Exception as e:
+            log.debug("activate_chrome failed: %s", e)
+        try:
+            self.focus_window("Google Chrome")
+            return True
+        except Exception:
+            pass
+        return False
+
     def play_youtube(self, query: str, auto_skip_ads: bool = True) -> str:
-        clean = re.sub(r"^(?:play|search for|listen to|play music|play the music|the music|music|the song|song)\s+", "", query, flags=re.I).strip()
+        clean = re.sub(r"^(?:play|search for|listen to|play music|play the music|the music|music|the song|song|a music|a video of among them|video of among them|video|video of)\s+", "", query, flags=re.I).strip()
+        clean = re.sub(r"\s+(?:and play a video of among them|and play a video|and play it|and play|please|video)$", "", clean, flags=re.I).strip()
         clean = clean or query
-        q = urllib.parse.quote_plus(clean)
-        url = f"https://www.youtube.com/results?search_query={q}"
-        webbrowser.open(url)
+        if not clean or clean.lower() in ("music", "song", "youtube", "relaxing music", "any music", "some music", "enemy music", "a music"):
+            clean = "relaxing music"
+
+        # 1. Resolve direct YouTube watch URL so playback actually starts
+        watch_url = f"https://www.youtube.com/results?search_query={urllib.parse.quote_plus(clean)}"
+        try:
+            req = urllib.request.Request(
+                watch_url,
+                headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+            )
+            html = urllib.request.urlopen(req, timeout=4.0).read().decode("utf-8", errors="ignore")
+            vids = re.findall(r'/watch\?v=([a-zA-Z0-9_-]{11})', html)
+            if vids:
+                watch_url = f"https://www.youtube.com/watch?v={vids[0]}"
+                log.info("Resolved direct YouTube watch URL for %r: %s", clean, watch_url)
+        except Exception as e:
+            log.debug("youtube video id scrape fallback: %s", e)
+
+        # 2. Launch directly in Google Chrome if installed, else fallback to default browser
+        chrome_candidates = [
+            r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+            r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+            os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe")
+        ]
+        opened = False
+        for cpath in chrome_candidates:
+            if os.path.exists(cpath):
+                try:
+                    subprocess.Popen([cpath, watch_url])
+                    opened = True
+                    log.info("Opened Google Chrome at %s with URL: %s", cpath, watch_url)
+                    break
+                except Exception as ex:
+                    log.debug("chrome launch error: %s", ex)
+        if not opened:
+            webbrowser.open(watch_url)
+
+        # 3. Bring Chrome to foreground
+        time.sleep(0.6)
+        self.activate_chrome()
+
         if auto_skip_ads:
             self.start_ad_skipper(duration=360.0)
-        return f"Searching and playing '{clean}' on YouTube. I'll automatically skip ads for you."
+        return f"Opened Google Chrome and started playing '{clean}' on YouTube."
 
     def start_ad_skipper(self, duration: float = 360.0) -> None:
         if self._ad_skip_thread and self._ad_skip_thread.is_alive():

@@ -50,6 +50,8 @@ class TTSWorker(threading.Thread):
         self.q: "queue.Queue[Optional[tuple[str, bool]]]" = queue.Queue()
         self.speaking = False
         self.current = ""
+        self.last_spoken = ""
+        self.last_spoken_time = 0.0
         self._abort = threading.Event()
         self._engine = None
         self._engine_lock = threading.Lock()
@@ -121,6 +123,8 @@ class TTSWorker(threading.Thread):
                 log.warning("TTS failed: %s", e)
             finally:
                 self.speaking = False
+                self.last_spoken = text
+                self.last_spoken_time = time.time()
                 self.current = ""
                 for cb in list(self.on_done):
                     try:
@@ -135,7 +139,7 @@ class TTSWorker(threading.Thread):
             return False
         if self.mode == "neural":
             return True
-        return time.time() - self._neural_failed_at > 120  # auto: retry neural two minutes after a failure
+        return time.time() - self._neural_failed_at > 15  # auto: retry neural 15 seconds after a failure
 
     # -- neural (edge-tts) -------------------------------------------------------------------------
     def _speak_neural(self, text: str) -> bool:
@@ -161,12 +165,12 @@ class TTSWorker(threading.Thread):
                 return True
             dec = miniaudio.decode_file(path)
             data = np.frombuffer(dec.samples, dtype=np.int16).reshape(-1, dec.nchannels)
-            sd.play(data, dec.sample_rate)
+            sd.play(data, dec.sample_rate, latency='high')
             while True:
                 s = sd.get_stream()
                 if s is None or not s.active or self._abort.is_set():
                     break
-                time.sleep(0.03)
+                time.sleep(0.05)
             sd.stop()
             return True
         except Exception as e:

@@ -7,6 +7,8 @@ import re
 import threading
 import time
 
+import numpy as np
+
 log = logging.getLogger("eli.wake")
 
 WAKE_RE = re.compile(
@@ -79,6 +81,7 @@ class WakeListener(threading.Thread):
         self._paused = threading.Event()
         self._awake_until = 0.0
         self._was_awake = False
+        self._cooldown_until = 0.0
 
     def extend_conversation(self, seconds: float = 60.0) -> None:
         """Keeps Eli awake for uninterrupted back-and-forth conversation (default 60s)."""
@@ -97,31 +100,46 @@ class WakeListener(threading.Thread):
     def stop(self) -> None:
         self._stop.set()
 
+    def _is_recent_speech_echo(self, text: str) -> bool:
+        low = text.lower().strip().strip(".!?,")
+        if not low:
+            return True
+        last = getattr(self.c.tts, "last_spoken", "").lower().strip().strip(".!?,")
+        last_time = getattr(self.c.tts, "last_spoken_time", 0.0)
+        now = time.time()
+        if last and (now - last_time) < 8.0:
+            words = set(low.split())
+            last_words = set(last.split())
+            if words and last_words:
+                common = words.intersection(last_words)
+                if len(common) / len(words) >= 0.5:
+                    return True
+        echo_phrases = (
+            "take your time", "nothing to be sorry", "sorry, i'm going to",
+            "i'm here with you", "opened google chrome", "how can i help",
+            "what would you like", "sure, i will", "all clean", "all clear"
+        )
+        if any(p in low for p in echo_phrases):
+            return True
+        return False
+
     def run(self) -> None:
         while not self._stop.is_set():
             if not bool(self.settings.get("wake_enabled")) or self.c.recorder is None or self._paused.is_set():
                 time.sleep(0.3)
                 continue
 
-            # --- 1. Vocal Barge-In: Active while Eli is speaking ---
+            # --- 1. Total Silence & Mic Off While Eli is Speaking ---
             if self.c.tts.speaking:
-                try:
-                    # Rapid mic capture during speech to catch 'stop', 'eli stop', 'be quiet'
-                    audio = self.c.recorder.record(max_seconds=1.2, silence_seconds=0.5, min_seconds=0.25, wait_timeout=0.6)
-                    if audio.size >= 16000 * 0.25:
-                        text = self.c.transcriber.transcribe(audio)
-                        low = text.lower().strip().strip(".!?,")
-                        is_stop = any(w in low for w in STOP_WORDS)
-                        if is_stop:
-                            log.info("Vocal barge-in STOP detected during speech: %r. Cutting speech.", text)
-                            self.c.stop_speaking()
-                            self.hub.toast("Stopped speaking.")
-                            self.hub.set_state("idle")
-                            time.sleep(0.3)
-                            continue
-                except Exception as e:
-                    log.debug("barge-in mic check error: %s", e)
-                    time.sleep(0.2)
+                self._cooldown_until = time.time() + 0.8
+                self.hub.status(mic_live=False)
+                time.sleep(0.2)
+                continue
+
+            # --- 2. Acoustic Settle Cooldown: Allow room reverberation / speaker echo to die down completely ---
+            if time.time() < self._cooldown_until:
+                self.hub.status(mic_live=False)
+                time.sleep(0.15)
                 continue
 
             # Don't record if push-to-talk or another recording is in progress
@@ -161,6 +179,10 @@ class WakeListener(threading.Thread):
 
             text = self.c.transcriber.transcribe(audio)
             if not text:
+                continue
+
+            if self._is_recent_speech_echo(text):
+                log.info("Discarded audio echo of Eli's own voice: %r", text)
                 continue
 
             hit, rest = match_wake(text, self.wake_words)

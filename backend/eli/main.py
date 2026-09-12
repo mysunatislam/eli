@@ -185,6 +185,19 @@ async def frame_jpg(token: str = Query("")):
     return Response(frame.to_jpeg(900, 70), media_type="image/jpeg", headers={"Cache-Control": "no-store"})
 
 
+@app.get("/api/quit")
+@app.post("/api/quit")
+def api_quit():
+    log.info("Quit requested via API; shutting down Eli backend.")
+    def _exit():
+        time.sleep(0.3)
+        import os
+        os._exit(0)
+    import threading
+    threading.Thread(target=_exit, daemon=True).start()
+    return {"status": "quitting"}
+
+
 @app.post("/api/command")
 async def api_command(body: dict, token: str = Query("")):
     _check_token(token)

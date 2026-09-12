@@ -2,12 +2,12 @@
 from __future__ import annotations
 
 import logging
+import os
+import re
 import threading
 from typing import Optional
 
 import numpy as np
-
-import re
 
 log = logging.getLogger("eli.stt")
 
@@ -39,6 +39,14 @@ def normalize_speech_text(text: str) -> str:
     # 5. Fix "Antigravity us" -> "Antigravity asks"
     t = re.sub(r"\bantigravity\s+(?:us|is)\b", "Antigravity asks", t, flags=re.I)
 
+    # 6. Fix "google pro" / "google crow" / "google comb" / "google grown" -> "Google Chrome"
+    t = re.sub(r"\bgoogle\s+(?:pro|crow|comb|grown|grow|home|com)\b", "Google Chrome", t, flags=re.I)
+
+    # 7. Fix ChatGPT acoustic mishearings
+    t = re.sub(r"\b(?:chat\s*gpt|chat\s*gbt|cat\s*gpt|chad\s*gpt|check\s*gpt|chat\s*pt|jet\s*gpt)\b", "ChatGPT", t, flags=re.I)
+    # Fix "search for t" or "search for tea" when in search / browser context
+    t = re.sub(r"\b(search(?:\s+for)?)\s+(?:t|tea|tee)\b", r"\1 ChatGPT", t, flags=re.I)
+
     t = re.sub(r"\s+", " ", t).strip()
     return t
 
@@ -57,8 +65,9 @@ class Transcriber:
             try:
                 from faster_whisper import WhisperModel  # type: ignore
                 log.info("loading whisper model '%s' (first run downloads it)...", self.model_name)
-                self._model = WhisperModel(self.model_name, device="cpu", compute_type="int8")
-                log.info("whisper ready")
+                threads = min(4, max(1, (os.cpu_count() or 4) // 2))
+                self._model = WhisperModel(self.model_name, device="cpu", compute_type="int8", cpu_threads=threads)
+                log.info("whisper ready (cpu_threads=%d)", threads)
             except Exception as e:
                 self.error = f"speech-to-text unavailable: {e}"
                 log.warning(self.error)
@@ -69,7 +78,8 @@ class Transcriber:
 
     INITIAL_PROMPT = (
         "Eli, Ellie, Elli. Hey Eli, Hello Eli, Hi Eli. "
-        "Open VS Code, write code, new code, new script, new file, python script, "
+        "Open Google Chrome, Chrome, search on Google, YouTube, ChatGPT, Chat GPT, OpenAI, Claude, "
+        "open browser, website, URL, open VS Code, write code, new code, new script, new file, python script, "
         "check errors, diagnose code, Antigravity, submit, allow, terminal."
     )
 

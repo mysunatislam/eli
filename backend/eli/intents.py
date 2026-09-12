@@ -31,7 +31,11 @@ PATTERNS: list[tuple[str, re.Pattern]] = [
         r"^(?:please )?(?:stop|pause|freeze|silence|kill)(?: (?:the|this|that))? (?:song|music|video|playback|track|youtube)(?: (?:where|which) (?:it is|it's) playing)?[.!]?$"
         r"|^(?:please )?(?:pause (?:the )?playback|pause the video|pause the song|pause the music|stop playback|pause|stop playing|why is it (?:still )?playing(?: still)?)[.!?]?$", re.I)),
     ("resume_media", re.compile(r"^(?:please )?(?:resume|unpause|continue)(?: (?:the|this|that))? (?:song|music|video|playback|track)?[.!]?$", re.I)),
-    ("close_window", re.compile(r"^(?:please )?close (?:the )?(?:window|tab|browser|chrome|youtube|vs code|vscode|editor|notepad)[.!]?$", re.I)),
+    ("close_window", re.compile(
+        r"^(?:please |can you |could you )*(?:close|kill|shut down|exit|quit)(?: (?:the|all))?(?: (?:active|current))?"
+        r"(?: (?:window|tab|browser|google chrome|chrome|youtube|videos?|video|vs code|vscode|editor|notepad)(?: (?:and|,)? (?:the )?(?:videos?|tabs?|google chrome|chrome))*)?"
+        r"(?: (?:you|it|we) played)?[.!]?$", re.I
+    )),
     ("click_allow", re.compile(r"^(?:please )?(?:click|press) (?:allow|submit|proceed|yes|confirm|approve)(?: (?:on|for) (?:antigravity|prompt|screen|dialog))?[.!]?$", re.I)),
     ("youtube", re.compile(
         r"^(?:(?:go (?:and|to) )?(?:search|look up|find|play)(?: on)? youtube (?:and |to )?(?:play )?(?:the )?(?:music |song )?)(.+?)[.!?]?$"
@@ -146,6 +150,120 @@ PREF_RE = re.compile(
     r"my name is|i work (?:at|on|with)|i use )", re.I)
 
 
+def is_user_complaint_not_playing(text: str) -> bool:
+    t = text.lower()
+    return any(k in t for k in (
+        "you lie", "you lied", "confident you lie",
+        "didn't even open", "didnt even open",
+        "didn't open", "didnt open",
+        "never clicks", "never opens", "never clicked", "never opened",
+        "starts talking again", "recording its own", "unhinged", "wasnt supposed to be like this",
+        "wasn't supposed", "fluctuated words",
+        "didn't search", "didnt search",
+        "didn't play", "didnt play",
+        "nothing is playing", "chrome isn't open", "chrome is not open",
+        "didn't go to", "didnt go to"
+    ))
+
+
+def extract_youtube_request(text: str) -> Optional[dict]:
+    t = text.lower().strip().strip(".!?,")
+    if any(k in t for k in (
+        "you lie", "you lied", "didn't", "didnt", "why did you", "why is it", "confident you lie",
+        "doesn't", "doesnt", "close", "stop", "pause", "kill", "exit", "quit", "submit", "antigravity",
+        "never", "clicks", "talking", "recording", "unhinged", "wasnt supposed", "take your time", "sorry",
+        "nothing to be sorry", "guess it is still", "fluctuated", "what is the question"
+    )):
+        return None
+    if len(t.split()) > 18:
+        return None
+    if not any(k in t for k in ("youtube", "song", "music", "video", "play", "track")):
+        return None
+
+    want_chrome = any(k in t for k in ("chrome", "google chrome", "browser"))
+
+    # Step 1: Strip leading browser launch commands (e.g. "can you please go to Google Chrome and", "go open Chrome then")
+    clean = re.sub(
+        r"^(?:(?:can you |could you |please |would you |i ask (?:you |it )?to |ask (?:you |it )?to )*(?:go(?:\s+(?:and|to|open))?|open|launch|navigate(?:\s+to)?|switch\s+to)\s*(?:open )?\s*(?:google\s+)?(?:chrome|browser|the browser|edge)(?: and |, | then )*)+",
+        "",
+        t,
+        flags=re.I
+    ).strip()
+
+    # Step 2: Strip leading youtube navigation commands (e.g. "search for YouTube, then", "go to YouTube and")
+    clean = re.sub(
+        r"^(?:(?:then |and )?(?:search(?:\s+(?:for|on))?|look up|go(?:\s+to)?|open|navigate(?:\s+to)?)\s+(?:for |on )?youtube(?: and |, | then )*)+",
+        "",
+        clean,
+        flags=re.I
+    ).strip()
+
+    # Step 3: Strip leading action verbs ("then play the music, ", "play a video of", etc.)
+    clean = re.sub(r"^(?:then |and |to )+", "", clean, flags=re.I).strip()
+    clean = re.sub(
+        r"^(?:search(?:\s+for)?|play(?:\s+the)?|listen\s+to|find)\s+(?:a |the )?(?:music|song|track|video)?(?:called |of )?[\s,]*",
+        "",
+        clean,
+        flags=re.I
+    ).strip()
+
+    # Step 4: Strip trailing boilerplate ("and play a video of among them", "on youtube", etc.)
+    clean = re.sub(r"(?:\s+(?:and|then|to))?\s*(?:play|watch)(?:\s+(?:a |the )?(?:video|song|track))?(?:\s+(?:of among them|among them|of them|of it|it))?[.!?]?$", "", clean, flags=re.I).strip()
+    clean = re.sub(r"(?:\s+(?:on youtube|in chrome|in google chrome|on google|on the web|in browser))+[.!?]?$", "", clean, flags=re.I).strip()
+    clean = re.sub(r"\s+(?:and|then|to|please)$", "", clean, flags=re.I).strip()
+    clean = re.sub(r"^(?:a |the )?(?:music |song |track |video )?[\s,]*", "", clean, flags=re.I).strip()
+    clean = clean.strip(" ,.-'\"")
+
+    # Step 5: Normalize generic requests ("any music", "some music", "music", "song")
+    if not clean or clean in ("youtube", "google", "chrome", "music", "song", "any music", "some music", "a music", "enemy music"):
+        clean = "relaxing music"
+
+    # Step 6: Strict length & sanity validation
+    words = clean.split()
+    if len(words) > 7 or any(w in clean for w in ("never", "starts", "talking", "recording", "clicks", "unhinged", "supposed", "submit", "close")):
+        return None
+
+    return {"query": clean, "open_chrome": want_chrome or True}
+
+
+def extract_browser_search_request(text: str) -> Optional[dict]:
+    t = text.lower().strip().strip(".!?,")
+    if any(k in t for k in ("you lie", "you lied", "didn't", "didnt", "why did you", "youtube", "song", "music", "video")):
+        return None
+
+    if not any(k in t for k in ("search", "google", "look up", "find", "open chatgpt", "go to chatgpt", "chrome")):
+        return None
+
+    want_chrome = any(k in t for k in ("chrome", "google chrome", "browser"))
+
+    # Direct "go to / open chatgpt"
+    if re.search(r"\b(?:go\s+to|open|launch)\s+chatgpt\b", t):
+        return {"query": "ChatGPT", "engine": "google", "open_chrome": True}
+
+    # Compound browser + search
+    clean = re.sub(
+        r"^(?:(?:can you |could you |please )*(?:go\s+(?:and|to)\s+|open\s+|switch\s+to\s+)?(?:google\s+)?(?:chrome|browser|the browser|edge|google)(?: and |, | then )*)+",
+        "",
+        t,
+        flags=re.I
+    ).strip()
+
+    clean = re.sub(r"^(?:then |and )+", "", clean, flags=re.I).strip()
+    clean = re.sub(
+        r"^(?:search|google|look up|find)(?:\s+(?:the\s+web|google|online|the\s+internet))?(?:\s+for|\s+on|\s+in)?\s*",
+        "",
+        clean,
+        flags=re.I
+    ).strip()
+
+    clean = re.sub(r"\s+(?:on\s+google\s+chrome|in\s+google\s+chrome|on\s+chrome|in\s+chrome|on\s+google|in\s+browser|in\s+the\s+browser)[.!?]?$", "", clean, flags=re.I).strip()
+    clean = re.sub(r"\s+(?:and|then|to|please)$", "", clean, flags=re.I).strip()
+
+    if clean and clean not in ("chrome", "google chrome", "browser", "google", "the web", "online", "internet"):
+        return {"query": clean, "engine": "google", "open_chrome": want_chrome or True}
+    return None
+
+
 def match(text: str):
     from .speech.stt import normalize_speech_text
     clean_text = normalize_speech_text(text)
@@ -154,6 +272,34 @@ def match(text: str):
         if re.search(r"\b(hello|hey|hi|good morning|good evening|howdy|yo|[iea]+l+[ieya]+|allie|ali|ally)\b", clean_text, re.I):
             return "greeting", []
         return None
+
+    low = t.lower()
+
+    # 1. Immediate detection of user criticism about missing action or unhinged conversation
+    if is_user_complaint_not_playing(t):
+        return "user_complaint_not_playing", [t]
+
+    # 2. Stop/Cancel commands have immediate priority
+    if low in ("stop", "stop the task", "stop task", "stop working", "stop it", "stop that", "stop immediately", "cancel", "cancel the task", "cancel task", "abort", "halt"):
+        return "stop_all", []
+    if any(k in low for k in ("stop the task", "stop whatever it is working", "stop whatever you are working", "stop working immediately", "cancel the task")):
+        return "stop_all", []
+
+    # 3. Direct priority matching for Close Window / Stop Media
+    for kind, rx in PATTERNS:
+        if kind in ("close_window", "stop_media", "stop_speech"):
+            m = rx.match(t)
+            if m:
+                groups = [g.strip() for g in m.groups() if g]
+                return kind, groups
+
+    # 4. Auto allow Antigravity (handles "submit everytime antigravity asks...")
+    if ("allow" in low or "submit" in low) and any(k in low for k in ("antigravity", "dialog", "prompt", "everytime", "every time", "always", "auto", "whenever")):
+        return "auto_allow_on", [t]
+    if any(k in low for k in ("keep going", "keep continuing", "keep monitoring", "till say stop", "until i say stop", "continue monitoring", "keep doing that", "i didnt say stop", "i didn't say stop")):
+        return "auto_allow_on", [t]
+
+    # 5. Direct pattern matching
     for kind, rx in PATTERNS:
         m = rx.match(t)
         if m:
@@ -164,32 +310,15 @@ def match(text: str):
                     continue
             return kind, groups
 
-    # Clause / multi-sentence checking: split by sentence boundaries or conjunctions
-    clauses = re.split(r"[.!?;\n]+", t)
-    if len(clauses) > 1 or any(c in t for c in (" and ", " then ", " like ", " also ")):
-        all_parts = []
-        for c in clauses:
-            sub = c.strip()
-            if sub:
-                all_parts.append(sub)
-                for sub_split in re.split(r"\b(?:also|and|like|then)\b", sub, flags=re.I):
-                    s = sub_split.strip()
-                    if s and s != sub:
-                        all_parts.append(s)
+    # 6. Compound or natural YouTube request (strictly validated)
+    yt_req = extract_youtube_request(t)
+    if yt_req and yt_req.get("query"):
+        return "youtube", [yt_req["query"]]
 
-        for part in all_parts:
-            cleaned = re.sub(r"^(?:also |and |like |can you |could you |please |it should |make sure to |just )+", "", part, flags=re.I).strip()
-            if not cleaned:
-                continue
-            for kind, rx in PATTERNS:
-                m = rx.match(cleaned)
-                if m:
-                    groups = [g.strip() for g in m.groups() if g]
-                    if kind == "open" and groups:
-                        arg = groups[0].lower()
-                        if any(delim in arg for delim in (",", ";", " and ", " then ", " click", " type")):
-                            continue
-                    return kind, groups
+    # 7. Compound or natural browser search request
+    search_req = extract_browser_search_request(t)
+    if search_req and search_req.get("query"):
+        return "browser_search", [search_req["query"]]
 
     # Robust keyword fallbacks for crucial instructions
     low = t.lower()

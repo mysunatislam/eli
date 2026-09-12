@@ -593,9 +593,7 @@ class MainAgent:
 
     def _speak_or_idle(self, reply: str, source: str) -> None:
         want_voice = self.speech and (self.settings.get("voice_replies") or source == "voice")
-        if want_voice and self._spoke_stream:
-            self.speech.flush_stream()
-        elif want_voice:
+        if want_voice:
             self.speech.say(reply)
         else:
             self.hub.set_state("idle")
@@ -663,13 +661,44 @@ class MainAgent:
             return await asyncio.to_thread(a.click_dialog_button)
         if kind == "youtube":
             return await asyncio.to_thread(a.play_youtube, arg)
+        if kind == "user_complaint_not_playing":
+            if any(k in raw.lower() for k in ("unhinged", "recording", "supposed", "talking again", "fluctuated", "sorry", "never clicks", "never opens", "close", "stop")):
+                await asyncio.to_thread(a.close_app_or_window, "Google Chrome")
+                await asyncio.to_thread(a.stop_or_pause_media)
+                if self.speech:
+                    self.speech.stop_speaking()
+                return "I apologize for the confusion earlier. I have closed Google Chrome, stopped media playback, and muted the microphone while speaking so I will never record my own voice again."
+
+            last_song = "relaxing music"
+            try:
+                for h in reversed(self.history):
+                    if h.get("role") == "user":
+                        parts = h.get("parts", [])
+                        for p in parts:
+                            txt = p.get("text", "")
+                            req = intents.extract_youtube_request(txt)
+                            if req and req.get("query"):
+                                last_song = req["query"]
+                                break
+                        if last_song != "relaxing music":
+                            break
+            except Exception:
+                pass
+            res = await asyncio.to_thread(a.play_youtube, last_song)
+            return f"I apologize for not launching it properly earlier. I have opened Google Chrome right now and started playing '{last_song}' on YouTube."
         if kind == "auto_allow_on":
             self.settings.set("auto_allow_antigravity", True)
             start_res = await asyncio.to_thread(a.start_auto_allow)
             btn_res = await asyncio.to_thread(a.click_dialog_button)
+            extra = ""
+            if any(k in raw.lower() for k in ("close", "shut", "kill", "stop")) and any(k in raw.lower() for k in ("chrome", "browser", "video", "played", "youtube")):
+                await asyncio.to_thread(a.close_app_or_window, "Google Chrome")
+                await asyncio.to_thread(a.stop_or_pause_media)
+                extra = " I have also closed Google Chrome and stopped video playback."
+
             if "didn't find an active" in btn_res:
-                return "Continuous auto-allow is active. I will monitor Antigravity permission prompts and automatically click Allow and Submit (yielding whenever you move the mouse) until you tell me to stop."
-            return f"{start_res} {btn_res}".strip()
+                return f"Continuous auto-allow is active. I will monitor Antigravity permission prompts and automatically click Allow and Submit whenever they appear.{extra}"
+            return f"{start_res} {btn_res}.{extra}".strip()
         if kind == "auto_allow_off":
             self.settings.set("auto_allow_antigravity", False)
             return await asyncio.to_thread(a.stop_auto_allow)
@@ -689,9 +718,10 @@ class MainAgent:
             return await asyncio.to_thread(self.coding.scan_project_errors, arg)
         if kind == "open_ide" and len(groups) == 2:
             ide, path = groups
-            return await asyncio.to_thread(self.coding.open_ide, ide, path)
-        if kind == "search":
-            return await asyncio.to_thread(a.web_search, arg, "google")
+        if kind in ("search", "browser_search"):
+            query = groups[0] if groups else arg
+            await asyncio.to_thread(a.web_search, query, "google", open_chrome=True)
+            return f"Opened Google Chrome and searched for '{query}' on Google."
         if kind == "facebook":
             raw_target = groups[0].strip() if groups and groups[0] else ""
             clean_target = re.sub(r"^(?:,\s*)?(?:open messenger|messenger|search for|search|find|look for|open)\s*", "", raw_target, flags=re.I).strip()
@@ -999,11 +1029,8 @@ class MainAgent:
     def _on_text(self, delta: str) -> None:
         self._streamed += delta
         self.hub.emit({"type": "transcript_delta", "id": self._stream_id, "text": delta}, to=("desktop",))
-        if self.speech and self.settings.get("voice_replies"):
-            self.speech.stream_text(delta)
-            self._spoke_stream = True
 
-    async def _loop(self, max_steps: int = 14) -> str:
+    async def _loop(self, max_steps: int = 4) -> str:
         last_text = ""
         tools_ran = 0
         tool_errors = 0

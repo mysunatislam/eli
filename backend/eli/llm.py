@@ -237,29 +237,30 @@ class GeminiProvider:
             return await self._complete(system, turns, tools, on_text)
         except Exception as e:
             s = str(e).lower()
-            if any(k in s for k in ("not_found", "no longer available", "not found", "429", "quota", "resource_exhausted", "service unavailable", "503")):
+            if any(k in s for k in ("not_found", "no longer available", "not found", "503")):
                 for alt in self.FALLBACK_MODELS:
                     if alt == self.model:
                         continue
-                    log.warning("model %s unavailable or quota reached (%s); trying fallback model %s", self.model, str(e)[:120], alt)
+                    log.warning("model %s unavailable (%s); trying fallback model %s", self.model, str(e)[:120], alt)
                     self.model = alt
                     try:
                         return await self._complete(system, turns, tools, on_text)
                     except Exception as e2:
                         s2 = str(e2).lower()
-                        if any(k in s2 for k in ("not_found", "no longer available", "not found", "429", "quota", "resource_exhausted", "service unavailable", "503")):
+                        if any(k in s2 for k in ("not_found", "no longer available", "not found", "503")):
                             continue
                         raise
             raise
 
     async def _complete(self, system: tuple[str, str], turns: list[dict], tools: list[dict], on_text: OnText = None) -> LLMResponse:
         T = self.T
-        config = T.GenerateContentConfig(
-            system_instruction="\n\n".join(s for s in system if s),
-            temperature=0.2,
-            tools=self._tools(tools) if tools else None,
-            automatic_function_calling=T.AutomaticFunctionCallingConfig(disable=True),
-        )
+        config_kwargs = {
+            "system_instruction": "\n\n".join(s for s in system if s),
+            "temperature": 0.2,
+            "tools": self._tools(tools) if tools else None,
+            "automatic_function_calling": T.AutomaticFunctionCallingConfig(disable=True),
+        }
+        config = T.GenerateContentConfig(**config_kwargs)
         contents = self._contents(turns)
         text_parts: list[str] = []
         calls: list[ToolCall] = []
