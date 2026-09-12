@@ -886,3 +886,99 @@ class CodingAgent:
         if not results:
             return f"Offline syntax scan complete: checked {checked_count} code files in '{target_dir.name}'. No syntax errors found! All clean."
         return f"Offline syntax scan found issues in {len(results)} of {checked_count} files in '{target_dir.name}':\n\n" + "\n\n".join(results)
+
+    def inspect_and_diagnose_vscode(self, auto=None, vision=None) -> str:
+        """Brings VS Code to the foreground, reads the active file & syntax AST,
+        analyzes visible screen OCR and terminal errors, and asks if the user wants Eli to fix it."""
+        try:
+            import pygetwindow as gw
+        except Exception:
+            gw = None
+        from ..fallback import diagnose
+
+        # 1. Bring VS Code to foreground (or launch if not open)
+        if auto is not None:
+            res = auto.focus_window("Visual Studio Code")
+            if not res or "No window matching" in res or "Couldn't" in res:
+                auto.open_app("vs code")
+                time.sleep(1.2)
+                auto.focus_window("Visual Studio Code")
+        else:
+            self.open_ide("vscode")
+
+        time.sleep(0.6)  # allow window paint
+
+        # 2. Identify active file from window title or recent
+        vscode_win = None
+        active_title = ""
+        if gw is not None:
+            try:
+                for w in gw.getAllWindows():
+                    if "Visual Studio Code" in (w.title or ""):
+                        vscode_win = w
+                        active_title = w.title or ""
+                        break
+            except Exception:
+                pass
+
+        ctx = self.vscode_context(vscode_win) if vscode_win else {}
+        active_file_name = ctx.get("file", "")
+        file_path: Optional[Path] = None
+
+        if active_file_name:
+            p = Path(active_file_name)
+            if p.is_file():
+                file_path = p
+            else:
+                hits = self.find_files(active_file_name, limit=1)
+                if hits and hits[0].get("kind") == "file":
+                    file_path = Path(hits[0]["path"])
+
+        # Check syntax of active file if found
+        ast_errors = []
+        if file_path and file_path.exists():
+            err_check = self.check_code_errors(str(file_path))
+            if not err_check.get("valid", True):
+                ast_errors = err_check.get("errors", [])
+
+        # 3. Screen / OCR analysis of active VS Code window
+        error_snip = ""
+        if vision is not None:
+            try:
+                frame = vision.capture_now()
+                frame.ocr()
+                error_snip = frame.error_snippet()
+            except Exception as e:
+                log.warning("VS Code screen capture/OCR failed: %s", e)
+
+        # 4. Formulate diagnosis and offer fix
+        target_display = file_path.name if file_path else (active_file_name or "active editor")
+
+        if ast_errors:
+            issues = "\n".join(f"  • {e}" for e in ast_errors[:4])
+            return (
+                f"I opened VS Code and inspected your code in '{target_display}'. "
+                f"I found the following syntax errors:\n{issues}\n\n"
+                f"Would you like me to fix this for you?"
+            )
+        elif error_snip:
+            diag = diagnose(error_snip)
+            clean_snip = "\n".join(error_snip.splitlines()[:6])
+            return (
+                f"I opened VS Code and detected an error in your terminal/editor:\n"
+                f"```\n{clean_snip}\n```\n"
+                f"Diagnosis: {diag}\n\n"
+                f"Would you like me to fix this for you?"
+            )
+        elif file_path:
+            return (
+                f"I opened VS Code and inspected your code in '{target_display}'. "
+                f"The syntax is clean and no errors are currently visible in the editor or terminal. "
+                f"Would you like me to review the code logic or run the script to see what happens?"
+            )
+        else:
+            return (
+                f"I opened VS Code. I can see the editor ({active_title[:50] if active_title else 'VS Code'}), "
+                f"and there are no syntax or terminal errors displayed on screen right now. "
+                f"Would you like me to inspect a specific file or run the code for you?"
+            )

@@ -60,7 +60,7 @@ class Transcriber:
 class Recorder:
     """Blocking microphone capture. Speech starts when energy rises above an adaptive noise floor and
     ends after `silence_seconds` of quiet."""
-    MIN_THRESHOLD = 0.0055
+    MIN_THRESHOLD = 0.0025
 
     def __init__(self):
         import sounddevice as sd  # type: ignore
@@ -85,11 +85,11 @@ class Recorder:
                     floor = min(rms, 0.015)
                 elif not started:
                     floor = 0.92 * floor + 0.08 * min(rms, 0.015)
-                threshold = max(self.MIN_THRESHOLD, (floor or 0.003) * 1.8)
+                threshold = max(self.MIN_THRESHOLD, (floor or 0.002) * 1.5)
                 if rms > threshold:
                     if not started:
                         started = True
-                        frames = frames[-6:]  # keep 600 ms of pre-roll
+                        frames = frames[-8:]  # keep 800 ms of pre-roll
                     silent = 0.0
                 elif started:
                     silent += 0.1

@@ -95,13 +95,13 @@ class WakeListener(threading.Thread):
                 time.sleep(0.3)
                 continue
             try:
-                # Fast wake capture: 5.0s max, 0.8s silence break, 2.0s wait timeout
-                audio = self.c.recorder.record(max_seconds=5.0, silence_seconds=0.8, wait_timeout=2.0)
+                # Fast wake capture: 5.0s max, 0.8s silence break, 3.5s wait timeout
+                audio = self.c.recorder.record(max_seconds=5.0, silence_seconds=0.8, wait_timeout=3.5)
             except Exception as e:
                 log.warning("wake listener mic error: %s", e)
                 time.sleep(1)
                 continue
-            if audio.size < 16000 * 0.35 or not self._active():
+            if audio.size < 16000 * 0.25 or not self._active():
                 continue
             text = self.c.transcriber.transcribe(audio)
             if not text:

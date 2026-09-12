@@ -331,6 +331,8 @@ class ToolExecutor:
             return ToolResult(f"{res['file']} ({res.get('language', '')}):\n" + "\n".join(res["errors"]), True)
         if name == "scan_project_errors":
             return ToolResult(c.scan_project_errors(str(args.get("folder", ""))))
+        if name == "inspect_and_diagnose_vscode":
+            return ToolResult(c.inspect_and_diagnose_vscode(self.auto, self.vision))
 
         # design
         if name == "check_mesh_file":
@@ -655,6 +657,10 @@ class MainAgent:
         if kind == "auto_allow_off":
             self.settings.set("auto_allow_antigravity", False)
             return await asyncio.to_thread(a.stop_auto_allow)
+        if kind == "greeting":
+            return "Hello! I'm Eli. How can I help you today?"
+        if kind == "vscode_check_code":
+            return await asyncio.to_thread(self.coding.inspect_and_diagnose_vscode, self.auto, self.vision)
         if kind == "learn_3d":
             from ..fallback import curriculum_3d_modeling
             return curriculum_3d_modeling()
@@ -1058,6 +1064,10 @@ class MainAgent:
             self.hub.set_state("idle")
             return "Stopped immediately. I have halted all active tasks, watchers, and speech."
 
+        # 0b. Greeting
+        if low in ("hello", "hey", "hi", "howdy", "good morning", "good afternoon", "good evening", "hello ellie", "hello eli", "hey eli", "hey ellie"):
+            return "Hello! I'm Eli. How can I help you today?"
+
         # 1. Deterministic intents (auto-allow, media, 3d, skip ad, ide, etc.)
         intent = intents.match(raw)
         if intent:
@@ -1108,6 +1118,10 @@ class MainAgent:
             return await asyncio.to_thread(c.open_ide, "matlab")
         if any(k in low for k in ("open my ide", "open the ide", "open ide")):
             return await asyncio.to_thread(c.open_ide, "ide")
+
+        # 7b. VS Code code checking & error inspection
+        if any(k in low for k in ("vs code", "vscode", "in here", "the code i have written", "code i wrote", "editor")) and any(k in low for k in ("check", "inspect", "analyse", "analyze", "see", "error", "errors", "look")):
+            return await asyncio.to_thread(c.inspect_and_diagnose_vscode, a, v)
 
         # 8. Offline code error checking
         if any(k in low for k in ("error", "errors", "syntax")) and any(k in low for k in ("code", "matlab", "python", "c++", "c ", "project")):

@@ -230,7 +230,7 @@ class GeminiProvider:
                 out.append(T.Content(role="user" if t["role"] == "user" else "model", parts=parts))
         return out
 
-    FALLBACK_MODELS = ("gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-2.5-flash", "gemini-flash-latest")
+    FALLBACK_MODELS = ("gemini-3.5-flash-lite", "gemini-3.6-flash", "gemini-3.1-flash-lite")
 
     async def complete(self, system: tuple[str, str], turns: list[dict], tools: list[dict], on_text: OnText = None) -> LLMResponse:
         try:
@@ -464,7 +464,11 @@ class OfflineLocalProvider:
                     on_text(reply_text)
                 return LLMResponse(text=reply_text, tool_calls=[call], stop="tool")
 
-        # 2. Syntax / Error check -> scan_project_errors
+        # 2. Syntax / Error check -> inspect_and_diagnose_vscode or scan_project_errors
+        if any(k in low for k in ("vs code", "vscode", "in here", "the code i have written", "code i wrote", "editor")) and any(k in low for k in ("check", "inspect", "analyse", "analyze", "see", "error", "errors", "look")):
+            if "inspect_and_diagnose_vscode" in tools_dict:
+                call = ToolCall(f"call_{secrets.token_hex(4)}", "inspect_and_diagnose_vscode", {})
+                return LLMResponse(text="Opening VS Code and inspecting your code...", tool_calls=[call], stop="tool")
         if any(k in low for k in ("syntax", "error", "errors", "check code", "check my code")):
             if "scan_project_errors" in tools_dict:
                 target = "matlab" if "matlab" in low else "python" if "python" in low else ""
@@ -556,7 +560,14 @@ class OfflineLocalProvider:
                 "I have a full local RAG and knowledge pipeline, and can create and test scripts in VS Code or MATLAB, "
                 "verify syntax, control YouTube/media, search Facebook/web, and autonomously manage your desktop."
             )
-        elif any(w in low for w in ("how", "what", "why", "explain", "tell me")):
+        elif any(w in low for w in ("how", "what", "why", "who", "where", "explain", "tell me")):
+            if "web_search" in tools_dict:
+                clean_q = re.sub(r"^(?:(?:can you |could you |please )*(?:search|google|look up|tell me about|tell me|explain|what is|what are|how to|who is)\s*)", "", last_user, flags=re.I).strip()
+                clean_q = clean_q or last_user
+                call = ToolCall(f"call_{secrets.token_hex(4)}", "web_search", {"query": clean_q, "engine": "google"})
+                msg = f"Searching Google for '{clean_q}'..."
+                if on_text: on_text(msg)
+                return LLMResponse(text=msg, tool_calls=[call], stop="tool")
             reply = (
                 f"I've noted your question about '{last_user[:60]}'. "
                 "I am running with your local knowledge base and tools active. "
@@ -640,7 +651,7 @@ class LLM:
                 elif name == "gemini":
                     if not gemini_key:
                         continue
-                    self.provider = GeminiProvider(os.getenv("ELI_GEMINI_MODEL", "gemini-3.5-flash"), gemini_key)
+                    self.provider = GeminiProvider(os.getenv("ELI_GEMINI_MODEL", "gemini-3.5-flash-lite"), gemini_key)
                 elif name == "anthropic":
                     if not anthropic_creds:
                         continue

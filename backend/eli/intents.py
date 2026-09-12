@@ -105,6 +105,14 @@ PATTERNS: list[tuple[str, re.Pattern]] = [
     ("learn_3d", re.compile(
         r"^(?:tell me |show me |what are )?(?:the )?steps to learn 3d model(?:l)?ing(?: from scratch)?(?: without api key)?[.!?]?$"
         r"|^(?:how (?:do i|to) learn 3d model(?:l)?ing|learn 3d model(?:l)?ing from scratch)[.!?]?$", re.I)),
+    ("greeting", re.compile(r"^(?:hello|hey|hi|howdy|good morning|good afternoon|good evening|yo)(?: there)?[.!]?$", re.I)),
+    ("vscode_check_code", re.compile(
+        r"^(?:(?:can you |could you |please )*(?:go to|open|switch to|look at) (?:vs code|vscode|the editor|visual studio code)(?: and |, )?)?"
+        r"(?:check|inspect|analyse|analyze|see|look at|review|find)(?: (?:the|my))? (?:code|codes|script|file|errors?)"
+        r"(?: (?:i (?:have |'ve )?written|i wrote|in (?:vs code|vscode|the editor|here)))?"
+        r"(?:.*?(?:error|errors|bug|bugs|problem|wrong))?[.!?]?$",
+        re.I
+    )),
     ("check_errors", re.compile(
         r"^(?:auto )?(?:search|check|find|scan)(?: for)? errors in (?:my )?([a-zA-Z0-9_#+ -]+?) (?:code|codes|project|files?)(?: offline)?[.!?]?$"
         r"|^(?:check|scan) (?:my )?([a-zA-Z0-9_#+ -]+?) (?:code|codes|files?) for errors(?: offline)?[.!?]?$", re.I)),
@@ -127,6 +135,8 @@ PREF_RE = re.compile(
 def match(text: str):
     t = strip_wake(text).strip()
     if not t:
+        if re.search(r"\b(hello|hey|hi|good morning|good evening|howdy|yo)\b", text, re.I):
+            return "greeting", []
         return None
     for kind, rx in PATTERNS:
         m = rx.match(t)
@@ -197,9 +207,15 @@ def match(text: str):
     if any(k in low for k in ("3d model", "3d design", "learn 3d", "learn blender", "steps to learn 3d")):
         return "learn_3d", []
 
+    if any(k in low for k in ("vs code", "vscode", "in here", "the code i have written", "code i wrote", "editor")) and any(k in low for k in ("check", "inspect", "analyse", "analyze", "see", "error", "errors", "look")):
+        return "vscode_check_code", []
+
     if any(k in low for k in ("error", "errors", "syntax")) and any(k in low for k in ("code", "matlab", "python", "c++", "c ", "project")):
         target = "matlab" if "matlab" in low else "python" if "python" in low else "c++" if "c++" in low else "c" if "c " in low else ""
         return "check_errors", [target] if target else []
+
+    if low in ("hello", "hey", "hi", "howdy", "good morning", "good afternoon", "good evening"):
+        return "greeting", []
 
     return None
 

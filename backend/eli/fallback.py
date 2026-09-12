@@ -3,7 +3,13 @@ explains common errors with a rules table, and describes what it sees."""
 from __future__ import annotations
 
 import asyncio
+import json
+import logging
 import re
+import urllib.parse
+import urllib.request
+
+log = logging.getLogger("eli.fallback")
 
 from . import intents
 
@@ -116,7 +122,11 @@ class FallbackResponder:
         self.broker = broker
 
     async def respond(self, text: str) -> str:
-        low = text.lower()
+        if not text or not text.strip():
+            return "Hello! I'm Eli. How can I help you today?"
+        low = text.lower().strip()
+        if low in ("hello", "hey", "hi", "howdy", "good morning", "good afternoon", "good evening", "hello ellie", "hello eli", "hey eli", "hey ellie"):
+            return "Hello! I'm Eli. How can I help you today?"
         if any(k in low for k in ("3d model", "3d design", "learn 3d", "learn blender", "steps to learn 3d")):
             return curriculum_3d_modeling()
         if intents.wants_screen(text):
@@ -142,10 +152,37 @@ class FallbackResponder:
         return self.vision.describe_locally(frame)
 
     def generic(self, text: str) -> str:
-        related = self.memory.recall(text, k=3)
-        hint = ""
+        clean_q = text.strip().strip("?.!\"'")
+        if not clean_q:
+            return "Hello! I'm Eli. How can I help you today?"
+
+        # 1. Recall from local memory
+        related = self.memory.recall(clean_q, k=2)
+        mem_hint = ""
         if related:
-            hint = " From memory: " + "; ".join(m.content for m in related)
-        return (f"I heard: \"{text}\". Without an API key I can't reason about open questions, but I can open apps, "
-                f"search the web, type for you, read your screen, explain errors and remember things."
-                f"{hint} Add ANTHROPIC_API_KEY to backend/.env to unlock the full Eli.")
+            mem_hint = "From memory: " + "; ".join(m.content for m in related) + "\n\n"
+
+        # 2. Try instant web search via DuckDuckGo API (100% free, zero-key)
+        abstract = ""
+        try:
+            q_enc = urllib.parse.quote_plus(clean_q)
+            api_url = f"https://api.duckduckgo.com/?q={q_enc}&format=json&no_html=1&skip_disambig=1"
+            req = urllib.request.Request(api_url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Eli/1.0"})
+            with urllib.request.urlopen(req, timeout=2.5) as resp:
+                data = json.loads(resp.read().decode("utf-8", errors="ignore"))
+                abstract = (data.get("AbstractText") or data.get("Answer") or "").strip()
+        except Exception as e:
+            log.debug("DuckDuckGo instant answer lookup failed: %s", e)
+
+        # 3. Open Google search in the browser so the user gets full interactive results
+        try:
+            self.auto.web_search(clean_q, "google")
+        except Exception as e:
+            log.debug("Auto web search launch failed: %s", e)
+
+        if abstract:
+            return f"{mem_hint}{abstract}\n\nI have also opened Google search results for '{clean_q}' in your browser."
+        elif mem_hint:
+            return f"{mem_hint}I have also opened Google search for '{clean_q}' in your browser."
+        else:
+            return f"I searched Google for '{clean_q}' and opened the top results in your browser."

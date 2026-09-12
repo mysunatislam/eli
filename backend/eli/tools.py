@@ -77,6 +77,8 @@ CODING_TOOLS = [
        {"path": {"type": "string"}}, ["path"]),
     _t("scan_project_errors", "Scan an entire project folder offline for syntax and structural errors in Python, MATLAB, C, and C++ files.",
        {"folder": {"type": "string"}}, []),
+    _t("inspect_and_diagnose_vscode", "Focus or open Visual Studio Code, inspect the active editor file syntax AST and visible terminal/screen OCR errors, formulate a diagnosis, and ask the user if they want Eli to fix it.",
+       {}),
 ]
 
 # --- Design agent ---------------------------------------------------------------------------------------
