@@ -435,6 +435,20 @@ class OfflineLocalProvider:
     model = "eli-offline-engine"
 
     async def complete(self, system: tuple[str, str], turns: list[dict], tools: list[dict], on_text: OnText = None) -> LLMResponse:
+        # Loop Breaker: If the last turn contains tool_result, a tool was just executed!
+        # Summarize the result and terminate with stop="end". DO NOT loop tools!
+        last_turn = turns[-1] if turns else {}
+        has_tool_result = any(p.get("type") == "tool_result" for p in last_turn.get("parts", []))
+        if has_tool_result:
+            res_parts = [p.get("content", "") for p in last_turn.get("parts", []) if p.get("type") == "tool_result"]
+            summary = " ".join(str(rp) for rp in res_parts if rp).strip()
+            summary = re.sub(r"\[Verification:[^\]]*\]", "", summary).strip()
+            summary = re.sub(r"\[Diagnosis:[^\]]*\]", "", summary).strip()
+            reply = summary[:300] if summary else "Action completed."
+            if on_text:
+                on_text(reply)
+            return LLMResponse(text=reply, tool_calls=[], stop="end")
+
         last_user = ""
         for t in reversed(turns):
             if t.get("role") == "user":
@@ -447,6 +461,15 @@ class OfflineLocalProvider:
 
         low = last_user.lower().strip()
         tools_dict = {t["name"]: t for t in tools}
+
+        # 0. Close App / Window / Tab (takes priority over search so 'close Google Chrome' never searches!)
+        if any(k in low for k in ("close", "shut down", "kill", "exit", "quit")):
+            if "close_app_or_window" in tools_dict:
+                target = "everything" if any(k in low for k in ("everything", "all")) else ("Google Chrome" if "chrome" in low else ("Microsoft Edge" if "edge" in low else ("tab" if "tab" in low else "window")))
+                call = ToolCall(f"call_{secrets.token_hex(4)}", "close_app_or_window", {"target": target})
+                reply = f"Closing {target}..."
+                if on_text: on_text(reply)
+                return LLMResponse(text=reply, tool_calls=[call], stop="tool")
 
         # 1. Coding task -> create_code_script tool
         if any(k in low for k in ("write", "create", "make", "generate", "code", "script", "program")) and any(k in low for k in ("python", "code", "matlab", "script", "program", "fibonacci", "prime", "math", "calculator", "game")):
@@ -487,7 +510,8 @@ class OfflineLocalProvider:
                 return LLMResponse(text="Opening MATLAB...", tool_calls=[call], stop="tool")
 
         # 4. Web & Social Media Navigation -> open_url / web_search
-        if any(k in low for k in ("facebook", "messenger", "fb", "youtube", "google", "website", "browse")):
+        is_complaint = any(k in low for k in ("why", "didn't", "didnt", "not to search", "wanted you to", "commanded", "complaint"))
+        if not is_complaint and any(k in low for k in ("facebook", "messenger", "fb", "youtube", "browse")):
             if "facebook" in low or "messenger" in low:
                 target_name = re.sub(r".*?(?:search for|search|find|look for|message|text)\s+", "", last_user, flags=re.I).strip()
                 target_name = re.sub(r"(?:on facebook|on messenger|in messenger|in facebook).*$", "", target_name, flags=re.I).strip()
@@ -511,9 +535,12 @@ class OfflineLocalProvider:
                     if on_text: on_text(msg)
                     return LLMResponse(text=msg, tool_calls=[call], stop="tool")
 
-            if "google" in low or "search" in low:
+        # Web search strictly requires explicit search directives (never triggers on 'close Google Chrome' or complaints!)
+        if not is_complaint and ("search" in low or low.startswith("google ") or low.startswith("look up ")):
+            if not any(k in low for k in ("don't search", "dont search", "not to search")):
                 query = re.sub(r"^(?:(?:can you |please )*(?:search|google|look up)(?: for)?\s*)", "", last_user, flags=re.I).strip()
-                if "web_search" in tools_dict and query:
+                query = re.sub(r"\s+on google$", "", query, flags=re.I).strip()
+                if "web_search" in tools_dict and query and len(query.split()) <= 15:
                     call = ToolCall(f"call_{secrets.token_hex(4)}", "web_search", {"query": query, "engine": "google"})
                     msg = f"Searching Google for '{query}'..."
                     if on_text: on_text(msg)

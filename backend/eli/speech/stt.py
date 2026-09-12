@@ -91,12 +91,23 @@ class Transcriber:
             audio,
             beam_size=1,
             language="en",
-            vad_filter=False,
+            vad_filter=True,
+            vad_parameters=dict(min_silence_duration_ms=400, threshold=0.4),
             condition_on_previous_text=False,
-            no_speech_threshold=0.6,
+            no_speech_threshold=0.5,
             initial_prompt=self.INITIAL_PROMPT,
         )
-        raw_text = " ".join(s.text.strip() for s in segments).strip()
+        valid_texts = []
+        for s in segments:
+            # Strictly filter out non-speech device audio, music, and background noise
+            if getattr(s, "no_speech_prob", 0.0) > 0.45:
+                continue
+            if getattr(s, "avg_logprob", 0.0) < -1.15:
+                continue
+            txt = s.text.strip()
+            if txt:
+                valid_texts.append(txt)
+        raw_text = " ".join(valid_texts).strip()
         return normalize_speech_text(raw_text)
 
 

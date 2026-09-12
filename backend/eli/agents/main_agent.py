@@ -251,6 +251,8 @@ class ToolExecutor:
             return ToolResult(r, r.startswith("I couldn't") or r.startswith("I don't know"))
         if name == "open_url":
             return ToolResult(a.open_url(str(args.get("url", ""))))
+        if name == "close_app_or_window":
+            return ToolResult(a.close_app_or_window(str(args.get("target", ""))))
         if name == "web_search":
             return ToolResult(a.web_search(str(args.get("query", "")), str(args.get("engine", "google"))))
         if name == "type_text":
@@ -599,7 +601,12 @@ class MainAgent:
         else:
             self.hub.set_state("idle")
         if source == "voice" and self.speech and hasattr(self.speech, "wake") and self.speech.wake:
-            self.speech.wake.extend_conversation(60.0)
+            # If Eli executed an action or gave a statement (not asking a question), enter silent standby
+            if getattr(self, "_should_standby", False) or not reply.strip().endswith("?"):
+                self.speech.wake.enter_standby()
+                self._should_standby = False
+            else:
+                self.speech.wake.extend_conversation(60.0)
 
     # -- routing -----------------------------------------------------------------------------------
     async def _route(self, text: str, source: str) -> str:
@@ -667,7 +674,11 @@ class MainAgent:
         if kind == "resume_media":
             return await asyncio.to_thread(a.resume_media)
         if kind == "close_window":
-            return await asyncio.to_thread(a.close_app_or_window, arg)
+            target = arg or (groups[0] if groups else "")
+            res = await asyncio.to_thread(a.close_app_or_window, target)
+            if self.speech and hasattr(self.speech, "wake") and self.speech.wake:
+                self.speech.wake.enter_standby()
+            return res
         if kind == "click_allow":
             return await asyncio.to_thread(a.click_dialog_button)
         if kind == "youtube_ask_song":
@@ -678,13 +689,26 @@ class MainAgent:
             return "I've opened YouTube for you in full screen! Which music or song would you like to listen to?"
         if kind == "youtube":
             self._pending_song_request = False
-            return await asyncio.to_thread(a.play_youtube, arg)
+            res = await asyncio.to_thread(a.play_youtube, arg)
+            if self.speech and hasattr(self.speech, "wake") and self.speech.wake:
+                self.speech.wake.enter_standby()
+            return res
+        if kind == "user_complaint_wrong_action":
+            await asyncio.to_thread(a.close_app_or_window, "everything")
+            await asyncio.to_thread(a.stop_or_pause_media)
+            if self.speech:
+                self.speech.stop_speaking()
+                if hasattr(self.speech, "wake") and self.speech.wake:
+                    self.speech.wake.enter_standby()
+            return "I apologize for the misunderstanding. I have closed Google Chrome, Microsoft Edge, and active browser tabs without performing any search. I am now on silent standby."
         if kind == "user_complaint_not_playing":
             if any(k in raw.lower() for k in ("unhinged", "recording", "supposed", "talking again", "fluctuated", "sorry", "never clicks", "never opens", "close", "stop")):
                 await asyncio.to_thread(a.close_app_or_window, "Google Chrome")
                 await asyncio.to_thread(a.stop_or_pause_media)
                 if self.speech:
                     self.speech.stop_speaking()
+                    if hasattr(self.speech, "wake") and self.speech.wake:
+                        self.speech.wake.enter_standby()
                 return "I apologize for the confusion earlier. I have closed Google Chrome, stopped media playback, and muted the microphone while speaking so I will never record my own voice again."
 
             last_song = "relaxing music"
@@ -703,6 +727,8 @@ class MainAgent:
             except Exception:
                 pass
             res = await asyncio.to_thread(a.play_youtube, last_song)
+            if self.speech and hasattr(self.speech, "wake") and self.speech.wake:
+                self.speech.wake.enter_standby()
             return f"I apologize for not launching it properly earlier. I have opened Google Chrome right now and started playing '{last_song}' on YouTube."
         if kind == "auto_allow_on":
             self.settings.set("auto_allow_antigravity", True)
@@ -721,10 +747,14 @@ class MainAgent:
             self.settings.set("auto_allow_antigravity", False)
             return await asyncio.to_thread(a.stop_auto_allow)
         if kind == "greeting":
+            if self.speech and hasattr(self.speech, "wake") and self.speech.wake:
+                self.speech.wake.extend_conversation(60.0)
             return "Hello! I'm here with you, go ahead."
         if kind == "stop_speech":
             if self.speech:
                 self.speech.stop_speaking()
+                if hasattr(self.speech, "wake") and self.speech.wake:
+                    self.speech.wake.enter_standby()
             self.hub.set_state("idle")
             return "Stopped talking."
         if kind == "vscode_check_code":
@@ -736,10 +766,18 @@ class MainAgent:
             return await asyncio.to_thread(self.coding.scan_project_errors, arg)
         if kind == "open_ide" and len(groups) == 2:
             ide, path = groups
+        if kind == "browser_search_edge":
+            query = groups[0] if groups else arg
+            res = await asyncio.to_thread(a.web_search, query, "google", browser="edge")
+            if self.speech and hasattr(self.speech, "wake") and self.speech.wake:
+                self.speech.wake.enter_standby()
+            return res
         if kind in ("search", "browser_search"):
             query = groups[0] if groups else arg
-            await asyncio.to_thread(a.web_search, query, "google", open_chrome=True)
-            return f"Opened Google Chrome and searched for '{query}' on Google."
+            res = await asyncio.to_thread(a.web_search, query, "google", open_chrome=True, browser="chrome")
+            if self.speech and hasattr(self.speech, "wake") and self.speech.wake:
+                self.speech.wake.enter_standby()
+            return res
         if kind == "facebook":
             raw_target = groups[0].strip() if groups and groups[0] else ""
             clean_target = re.sub(r"^(?:,\s*)?(?:open messenger|messenger|search for|search|find|look for|open)\s*", "", raw_target, flags=re.I).strip()
@@ -1231,10 +1269,14 @@ class MainAgent:
             from ..fallback import curriculum_3d_modeling
             return curriculum_3d_modeling()
 
-        # 10. Close window or app
-        if low.startswith("close ") or "close the window" in low or "close window" in low:
-            target = re.sub(r"^close (?:the )?", "", low).strip()
-            return await asyncio.to_thread(a.close_app_or_window, target)
+        # 10. Close window, app, tab, or everything
+        close_req = intents.extract_close_request(raw)
+        if close_req or low.startswith("close ") or "close the window" in low or "close window" in low:
+            target = close_req[1][0] if close_req else re.sub(r"^close (?:the )?", "", low).strip()
+            res = await asyncio.to_thread(a.close_app_or_window, target)
+            if self.speech and hasattr(self.speech, "wake") and self.speech.wake:
+                self.speech.wake.enter_standby()
+            return res
 
         # 11. Open general app
         if low.startswith("open ") or low.startswith("launch "):

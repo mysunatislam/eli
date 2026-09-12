@@ -151,6 +151,17 @@ PREF_RE = re.compile(
     r"my name is|i work (?:at|on|with)|i use )", re.I)
 
 
+def is_user_complaint_wrong_action(text: str) -> bool:
+    t = text.lower()
+    return any(k in t for k in (
+        "wanted you to close", "commanded you to close", "asked you to close",
+        "told you to close", "not to search", "why did you search",
+        "went to google chrome and search", "not to search why",
+        "commanded the google chrome not to search",
+        "didn't understand", "keeps executing in a loop", "keeps listening again"
+    ))
+
+
 def is_user_complaint_not_playing(text: str) -> bool:
     t = text.lower()
     return any(k in t for k in (
@@ -165,6 +176,57 @@ def is_user_complaint_not_playing(text: str) -> bool:
         "nothing is playing", "chrome isn't open", "chrome is not open",
         "didn't go to", "didnt go to"
     ))
+
+
+def extract_close_request(text: str) -> Optional[tuple[str, list[str]]]:
+    t = text.lower().strip().strip(".!?,")
+    if not any(k in t for k in ("close", "shut down", "kill", "exit", "quit")):
+        return None
+
+    # Exclude queries asking why something was closed or negative directives
+    if any(k in t for k in ("why did you close", "don't close", "dont close", "not to close", "without closing")):
+        return None
+
+    # If it's a complaint about searching instead of closing, handled by complaint intent
+    if is_user_complaint_wrong_action(t):
+        return None
+
+    # 1. Everything / All windows / All tabs
+    if any(k in t for k in ("everything", "all the tabs", "all tabs", "all windows", "active windows are not closed")):
+        if "chrome" in t:
+            return "close_window", ["Google Chrome"]
+        elif "edge" in t:
+            return "close_window", ["Microsoft Edge"]
+        return "close_window", ["everything"]
+
+    # 2. Specific browser / app targets
+    if "chrome" in t or "google chrome" in t:
+        return "close_window", ["Google Chrome"]
+
+    if "edge" in t or "microsoft edge" in t:
+        return "close_window", ["Microsoft Edge"]
+
+    if "vs code" in t or "vscode" in t or "the editor" in t:
+        return "close_window", ["Visual Studio Code"]
+
+    if "notepad" in t:
+        return "close_window", ["Notepad"]
+
+    # 3. Tabs vs Windows
+    if re.search(r"\b(?:all\s+)?tabs?\b", t):
+        return "close_window", ["tab"]
+
+    if re.search(r"\b(?:browsers?|google|chrome|edge)\b", t):
+        return "close_window", ["browser"]
+
+    if re.search(r"\b(?:windows?|active\s+window|current\s+window)\b", t):
+        return "close_window", ["window"]
+
+    # 4. Conversational close (e.g. "well, listen, close here", "close please", "just close")
+    if re.search(r"\b(?:close|shut down|exit|quit)\b", t):
+        return "close_window", ["window"]
+
+    return None
 
 
 def extract_youtube_request(text: str) -> Optional[dict]:
@@ -231,22 +293,24 @@ def extract_browser_search_request(text: str) -> Optional[dict]:
     t = text.lower().strip().strip(".!?,")
     if any(k in t for k in (
         "you lie", "you lied", "didn't", "didnt", "why did you", "youtube", "song", "music", "video",
-        "close", "shut", "kill", "stop", "pause", "exit", "quit", "cancel", "submit", "allow", "antigravity"
+        "close", "shut", "kill", "stop", "pause", "exit", "quit", "cancel", "submit", "allow", "antigravity",
+        "not to search", "wanted you to close"
     )):
         return None
 
-    if not any(k in t for k in ("search", "google", "look up", "find", "open chatgpt", "go to chatgpt", "chrome")):
+    if not any(k in t for k in ("search", "google", "look up", "find", "open chatgpt", "go to chatgpt", "chrome", "edge")):
         return None
 
-    want_chrome = any(k in t for k in ("chrome", "google chrome", "browser"))
+    want_edge = any(k in t for k in ("microsoft edge", "edge browser", "edge"))
+    browser = "edge" if want_edge else "chrome"
 
     # Direct "go to / open chatgpt"
     if re.search(r"\b(?:go\s+to|open|launch)\s+chatgpt\b", t):
-        return {"query": "ChatGPT", "engine": "google", "open_chrome": True}
+        return {"query": "ChatGPT", "engine": "google", "browser": browser, "open_chrome": browser == "chrome", "open_edge": browser == "edge"}
 
     # Compound browser + search
     clean = re.sub(
-        r"^(?:(?:can you |could you |please )*(?:go\s+(?:and|to)\s+|open\s+|switch\s+to\s+)?(?:google\s+)?(?:chrome|browser|the browser|edge|google)(?: and |, | then )*)+",
+        r"^(?:(?:can you |could you |please )*(?:go(?:\s+(?:and|to))?\s+|open\s+|switch\s+to\s+)?(?:the\s+)?(?:google\s+)?(?:chrome|browser|the browser|microsoft\s+edge|edge|google)(?: and |, | then )*)+",
         "",
         t,
         flags=re.I
@@ -260,11 +324,18 @@ def extract_browser_search_request(text: str) -> Optional[dict]:
         flags=re.I
     ).strip()
 
+    # Strip trailing browser directives (e.g. ". Go to Microsoft Edge browser", "in edge", "on edge")
+    clean = re.sub(r"(?:[\.,;]?\s*(?:go to|open|in|using|on|with)?\s*(?:the\s+)?(?:microsoft\s+)?edge(?:\s+browser)?)+[.!?]?$", "", clean, flags=re.I).strip()
+    clean = re.sub(r"(?:[\.,;]?\s*(?:go to|open|in|using|on|with)?\s*(?:the\s+)?(?:google\s+)?chrome(?:\s+browser)?)+[.!?]?$", "", clean, flags=re.I).strip()
     clean = re.sub(r"\s+(?:on\s+google\s+chrome|in\s+google\s+chrome|on\s+chrome|in\s+chrome|on\s+google|in\s+browser|in\s+the\s+browser)[.!?]?$", "", clean, flags=re.I).strip()
     clean = re.sub(r"\s+(?:and|then|to|please)$", "", clean, flags=re.I).strip()
 
-    if clean and clean not in ("chrome", "google chrome", "browser", "google", "the web", "online", "internet"):
-        return {"query": clean, "engine": "google", "open_chrome": want_chrome or True}
+    # Capitalize ChatGPT if query is chatgpt
+    if clean.lower() == "chatgpt":
+        clean = "ChatGPT"
+
+    if clean and clean not in ("chrome", "google chrome", "browser", "google", "the web", "online", "internet", "edge", "microsoft edge"):
+        return {"query": clean, "engine": "google", "browser": browser, "open_chrome": browser == "chrome", "open_edge": browser == "edge"}
     return None
 
 
@@ -279,7 +350,9 @@ def match(text: str):
 
     low = t.lower()
 
-    # 1. Immediate detection of user criticism about missing action or unhinged conversation
+    # 1. Immediate detection of user complaints about wrong action or searching instead of closing
+    if is_user_complaint_wrong_action(t):
+        return "user_complaint_wrong_action", [t]
     if is_user_complaint_not_playing(t):
         return "user_complaint_not_playing", [t]
 
@@ -289,7 +362,11 @@ def match(text: str):
     if any(k in low for k in ("stop the task", "stop whatever it is working", "stop whatever you are working", "stop working immediately", "cancel the task")):
         return "stop_all", []
 
-    # 3. Direct priority matching for Close Window / Stop Media
+    # 3. Direct priority matching for Close Window / Tab / Browser (catches "close all the tabs here, close Google Chrome", etc.)
+    close_req = extract_close_request(t)
+    if close_req:
+        return close_req
+
     for kind, rx in PATTERNS:
         if kind in ("close_window", "stop_media", "stop_speech"):
             m = rx.match(t)
@@ -303,7 +380,7 @@ def match(text: str):
     if any(k in low for k in ("keep going", "keep continuing", "keep monitoring", "till say stop", "until i say stop", "continue monitoring", "keep doing that", "i didnt say stop", "i didn't say stop")):
         return "auto_allow_on", [t]
 
-    # 4. Compound or natural YouTube request (strictly validated before generic PATTERNS)
+    # 5. Compound or natural YouTube request (strictly validated before generic PATTERNS)
     yt_req = extract_youtube_request(t)
     if yt_req:
         if yt_req.get("generic"):
@@ -311,9 +388,11 @@ def match(text: str):
         elif yt_req.get("query"):
             return "youtube", [yt_req["query"]]
 
-    # 5. Compound or natural browser search request
+    # 6. Compound or natural browser search request (with Edge and Chrome support)
     search_req = extract_browser_search_request(t)
     if search_req and search_req.get("query"):
+        if search_req.get("browser") == "edge":
+            return "browser_search_edge", [search_req["query"]]
         return "browser_search", [search_req["query"]]
 
     # 6. Direct pattern matching

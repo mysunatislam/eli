@@ -85,10 +85,21 @@ class WakeListener(threading.Thread):
 
     def extend_conversation(self, seconds: float = 60.0) -> None:
         """Keeps Eli awake for uninterrupted back-and-forth conversation (default 60s)."""
-        self._awake_until = time.time() + max(seconds, 60.0)
-        self._was_awake = True
+        if not getattr(self.c, "is_media_playing", False):
+            self._awake_until = time.time() + max(seconds, 45.0)
+            self._was_awake = True
+
+    def enter_standby(self) -> None:
+        """Instantly transitions Eli to silent standby (idle) mode."""
+        self._awake_until = 0.0
+        self._was_awake = False
+        self.hub.set_state("idle")
+        self.hub.status(mic_live=False)
+        log.info("Eli entered silent standby mode.")
 
     def is_awake(self) -> bool:
+        if getattr(self.c, "is_media_playing", False):
+            return False
         return time.time() < self._awake_until
 
     def pause(self) -> None:
@@ -148,12 +159,13 @@ class WakeListener(threading.Thread):
                 continue
 
             now = time.time()
-            awake = now < self._awake_until
+            media_active = bool(getattr(self.c, "is_media_playing", False))
+            awake = (now < self._awake_until) and not media_active
 
             # Check for transition: awake -> standby timeout (60 seconds elapsed without user voice)
             if not awake and self._was_awake:
                 self._was_awake = False
-                log.info("Continuous conversation 60s window timed out. Returning to silent standby.")
+                log.info("Continuous conversation window timed out or media active. Returning to silent standby.")
                 self.hub.toast("Eli is on standby. Say 'Hello Eli' anytime.")
                 self.hub.set_state("idle")
 
@@ -165,7 +177,7 @@ class WakeListener(threading.Thread):
                     audio = self.c.recorder.record(max_seconds=25.0, silence_seconds=2.0, min_seconds=0.4, wait_timeout=3.0)
                 else:
                     # Standby wake-word capture: shorter window, waiting for wake phrase
-                    audio = self.c.recorder.record(max_seconds=6.0, silence_seconds=1.2, min_seconds=0.3, wait_timeout=3.0)
+                    audio = self.c.recorder.record(max_seconds=5.0, silence_seconds=1.0, min_seconds=0.3, wait_timeout=3.0)
             except Exception as e:
                 log.warning("wake listener mic error: %s", e)
                 time.sleep(0.5)
@@ -194,14 +206,18 @@ class WakeListener(threading.Thread):
                 log.info("Awake conversational turn received: %r", cmd)
             else:
                 if not hit:
-                    # In standby mode, ignore casual room chatter that doesn't start with Eli
+                    # In standby mode, ignore casual room chatter or speaker music that doesn't start with Eli
                     log.debug("Standby ignored non-wake speech: %r", text)
                     continue
                 cmd = rest.strip() if rest.strip() else text.strip()
 
-            # Keep awake for another 60 seconds from this utterance
-            self._awake_until = time.time() + 60.0
-            self._was_awake = True
+            # If media is actively playing, keep Eli strictly on standby so speaker music is never recorded
+            if media_active:
+                self._awake_until = 0.0
+                self._was_awake = False
+            else:
+                self._awake_until = time.time() + 45.0
+                self._was_awake = True
             self.c.recording = True
 
             try:

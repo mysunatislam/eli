@@ -50,6 +50,8 @@ AUTOMATION_TOOLS = [
     _t("auto_allow_antigravity", "Start or stop watching for Antigravity permission prompts to automatically click Allow/Submit.",
        {"enabled": {"type": "boolean"}}, ["enabled"]),
     _t("dismiss_interferences", "Dismiss any stuck modal file dialogs (Create File, Save As) or popups on screen by sending Escape or closing the dialog window.", {}),
+    _t("close_app_or_window", "Close an application, browser, window, or tab (e.g. 'Google Chrome', 'Microsoft Edge', 'tab', 'everything').",
+       {"target": {"type": "string", "description": "The window, app, or 'everything' to close."}}),
 ]
 
 # --- Coding agent --------------------------------------------------------------------------------------

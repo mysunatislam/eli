@@ -37,10 +37,15 @@ class SpeechController:
         self._ptt_thread: threading.Thread | None = None
         self._buf = ""
         self._in_code = False
+        self.is_media_playing = False
         self.wake = WakeListener(self, hub, settings, config.WAKE_WORDS)
         self.wake.start()
 
     # -- helpers -----------------------------------------------------------------------------------
+    def enter_standby(self) -> None:
+        if self.wake:
+            self.wake.enter_standby()
+
     def available(self) -> bool:
         return self.recorder is not None
 

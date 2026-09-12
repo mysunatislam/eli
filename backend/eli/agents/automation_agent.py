@@ -211,6 +211,7 @@ class AutomationAgent:
         self._ad_skip_thread: Optional[threading.Thread] = None
         self._auto_allow_stop = threading.Event()
         self._auto_allow_thread: Optional[threading.Thread] = None
+        self.is_media_playing = False
 
     # -- risk ----------------------------------------------------------------------------
     def risk_of(self, tool: str, args: dict, active_title: str = "") -> str:
@@ -295,7 +296,7 @@ class AutomationAgent:
         webbrowser.open(url)
         return f"Opened {url}."
 
-    def web_search(self, query: str, engine: str = "google", open_chrome: bool = False) -> str:
+    def web_search(self, query: str, engine: str = "google", open_chrome: bool = False, browser: str = "chrome") -> str:
         q = urllib.parse.quote_plus(query)
         urls = {
             "google": f"https://www.google.com/search?q={q}",
@@ -305,7 +306,11 @@ class AutomationAgent:
         }
         url = urls.get(engine.lower(), urls["google"])
 
-        if open_chrome or engine.lower() == "google":
+        if browser.lower() in ("edge", "microsoft edge", "msedge"):
+            self.visual_open_edge(url, query=query)
+            return f"Opened Microsoft Edge in full screen and searched for '{query}' on Google."
+
+        if open_chrome or engine.lower() == "google" or browser.lower() in ("chrome", "google chrome"):
             self.visual_open_chrome(url, query=query)
             return f"Opened Google Chrome in full screen and searched for '{query}' on Google."
 
@@ -313,7 +318,7 @@ class AutomationAgent:
         return f"Searched {engine} for '{query}'."
 
     def visual_open_chrome(self, url: str, query: str = "") -> bool:
-        """Visibly moves the cursor to Google Chrome on taskbar/desktop, launches Chrome detached from Antigravity,
+        """Visibly moves cursor towards taskbar / Google Chrome, launches Chrome detached from Antigravity,
         brings the browser to the active foreground in full screen (SW_MAXIMIZE), and moves cursor to search bar."""
         ensure_interactive_desktop()
         sw, sh = 1920, 1080
@@ -325,24 +330,27 @@ class AutomationAgent:
             except Exception:
                 pass
 
-        # 1. Visual mouse movement to taskbar / Chrome icon
+        # 1. Visual mouse glide to taskbar (NEVER click blindly to avoid minimizing Antigravity/active apps!)
         target_x = sw // 2 - 60
         target_y = sh - 24
+        clicked = False
         if self.vision:
             try:
                 hit = self.vision.find_text("Chrome")
                 if hit:
                     target_x, target_y = hit[0], hit[1]
+                    self.move_mouse(target_x, target_y)
+                    time.sleep(0.15)
+                    self.click(target_x, target_y)
+                    clicked = True
             except Exception:
                 pass
 
-        try:
-            self.move_mouse(target_x, target_y)
-            time.sleep(0.15)
-            self.click(target_x, target_y)
-            time.sleep(0.2)
-        except Exception as e:
-            log.debug("visual mouse taskbar move failed: %s", e)
+        if not clicked:
+            try:
+                self.move_mouse(target_x, target_y)
+            except Exception:
+                pass
 
         # 2. Chrome executable path
         chrome_candidates = [
@@ -352,36 +360,15 @@ class AutomationAgent:
         ]
         chrome_exe = next((p for p in chrome_candidates if os.path.exists(p)), None)
 
-        # Clean up orphaned headless chrome processes with no visible windows
-        if os.name == "nt":
-            try:
-                import psutil
-                chrome_procs = [p for p in psutil.process_iter(['name', 'pid']) if p.info['name'] and 'chrome' in p.info['name'].lower()]
-                if chrome_procs and gw is not None:
-                    wins = [w for w in gw.getAllWindows() if "chrome" in (w.title or "").lower() or "youtube" in (w.title or "").lower()]
-                    if not wins and len(chrome_procs) > 6:
-                        log.info("Found %d headless zombie chrome processes without GUI window; cleaning up", len(chrome_procs))
-                        for p in chrome_procs:
-                            try:
-                                p.kill()
-                            except Exception:
-                                pass
-                        time.sleep(0.4)
-            except Exception as e:
-                log.debug("chrome zombie check error: %s", e)
-
-        # 3. Launch detached via Windows Shell (cmd /c start or explorer) so Antigravity closing never terminates Chrome
         opened = False
         if chrome_exe:
             try:
-                creationflags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
                 subprocess.Popen(
-                    [chrome_exe, "--start-maximized", "--new-window", url],
-                    creationflags=creationflags,
+                    [chrome_exe, "--no-first-run", "--no-default-browser-check", "--start-maximized", "--new-window", url],
                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
                 )
                 opened = True
-                log.info("Launched Google Chrome directly (no black window): %s", url)
+                log.info("Launched Google Chrome: %s", url)
             except Exception as e:
                 log.debug("direct chrome launch failed: %s; trying os.startfile", e)
                 try:
@@ -396,11 +383,11 @@ class AutomationAgent:
             except Exception:
                 pass
 
-        # 4. Bring window to active foreground in full screen (SW_MAXIMIZE)
+        # 3. Bring window to active foreground in full screen (SW_MAXIMIZE)
         time.sleep(1.0)
         self.activate_chrome(maximize=True)
 
-        # 5. Visually glide cursor smoothly to Chrome's search / address bar
+        # 4. Visually glide cursor smoothly to Chrome's search / address bar
         try:
             search_x = sw // 2
             search_y = 130
@@ -413,6 +400,7 @@ class AutomationAgent:
     def activate_chrome(self, maximize: bool = True) -> bool:
         """Finds only genuine Google Chrome windows (strictly chrome.exe, excluding Antigravity and Electron dummy windows),
         restores/maximizes it into full screen, and brings it to the foreground."""
+        ensure_interactive_desktop()
         try:
             import psutil
             user32 = ctypes.windll.user32
@@ -446,7 +434,6 @@ class AutomationAgent:
                 if any(bad in t for bad in ("eli", "antigravity", "visual studio")):
                     return True
 
-                # Must have real screen dimensions (not a zero-sized offscreen Chromium helper)
                 rect = wintypes.RECT()
                 user32.GetWindowRect(hwnd, ctypes.byref(rect))
                 if (rect.right - rect.left) < 200 or (rect.bottom - rect.top) < 200:
@@ -456,7 +443,11 @@ class AutomationAgent:
                 return True
 
             WNDENUMPROC = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_int, ctypes.c_int)
-            user32.EnumWindows(WNDENUMPROC(enum_cb), 0)
+            for _ in range(5):
+                user32.EnumWindows(WNDENUMPROC(enum_cb), 0)
+                if found_hwnds:
+                    break
+                time.sleep(0.25)
 
             if found_hwnds:
                 hwnd = found_hwnds[0]
@@ -470,6 +461,163 @@ class AutomationAgent:
                 for w in gw.getAllWindows():
                     t = (w.title or "").lower()
                     if ("chrome" in t or "youtube" in t) and not any(bad in t for bad in ("eli", "antigravity", "visual studio")):
+                        if w.isMinimized:
+                            w.restore()
+                        if maximize:
+                            try:
+                                w.maximize()
+                            except Exception:
+                                pass
+                        w.activate()
+                        self._force_foreground(w._hWnd, maximize=maximize)
+                        return True
+        except Exception:
+            pass
+        return False
+
+    def visual_open_edge(self, url: str, query: str = "") -> bool:
+        """Visibly moves the cursor towards taskbar / Microsoft Edge, launches Edge detached from Antigravity,
+        brings the browser to the active foreground in full screen (SW_MAXIMIZE), and moves cursor to search bar."""
+        ensure_interactive_desktop()
+        sw, sh = 1920, 1080
+        if os.name == "nt":
+            try:
+                user32 = ctypes.windll.user32
+                sw = user32.GetSystemMetrics(0)
+                sh = user32.GetSystemMetrics(1)
+            except Exception:
+                pass
+
+        # 1. Visual mouse glide to taskbar (NEVER click blindly to avoid minimizing Antigravity/active apps!)
+        target_x = sw // 2 - 20
+        target_y = sh - 24
+        clicked = False
+        if self.vision:
+            try:
+                hit = self.vision.find_text("Edge")
+                if hit:
+                    target_x, target_y = hit[0], hit[1]
+                    self.move_mouse(target_x, target_y)
+                    time.sleep(0.15)
+                    self.click(target_x, target_y)
+                    clicked = True
+            except Exception:
+                pass
+
+        if not clicked:
+            try:
+                self.move_mouse(target_x, target_y)
+            except Exception:
+                pass
+
+        # 2. Edge executable candidates
+        edge_candidates = [
+            r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+            r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+            os.path.expandvars(r"%LOCALAPPDATA%\Microsoft\Edge\Application\msedge.exe")
+        ]
+        edge_exe = next((p for p in edge_candidates if os.path.exists(p)), None)
+
+        opened = False
+        if edge_exe:
+            try:
+                subprocess.Popen(
+                    [edge_exe, "--no-first-run", "--no-default-browser-check", "--start-maximized", "--new-window", url],
+                    stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+                )
+                opened = True
+                log.info("Launched Microsoft Edge directly: %s", url)
+            except Exception as e:
+                log.debug("direct edge launch failed: %s; trying cmd start", e)
+                try:
+                    subprocess.Popen(
+                        ["cmd.exe", "/c", "start", "", edge_exe, "--no-first-run", "--no-default-browser-check", "--start-maximized", "--new-window", url]
+                    )
+                    opened = True
+                except Exception:
+                    pass
+
+        if not opened:
+            try:
+                subprocess.Popen(["cmd.exe", "/c", "start", f"microsoft-edge:{url}"])
+            except Exception:
+                pass
+
+        time.sleep(1.2)
+        self.activate_edge(maximize=True)
+
+        try:
+            search_x = sw // 2
+            search_y = 130
+            self.move_mouse(search_x, search_y)
+        except Exception:
+            pass
+
+        return True
+
+    def activate_edge(self, maximize: bool = True) -> bool:
+        """Finds only genuine Microsoft Edge windows (strictly msedge.exe),
+        restores/maximizes it into full screen, and brings it to the foreground."""
+        ensure_interactive_desktop()
+        try:
+            import psutil
+            user32 = ctypes.windll.user32
+            found_hwnds = []
+
+            def enum_cb(hwnd, extra):
+                if not user32.IsWindowVisible(hwnd):
+                    return True
+                cls_name = ctypes.create_unicode_buffer(256)
+                user32.GetClassNameW(hwnd, cls_name, 256)
+                if cls_name.value != "Chrome_WidgetWin_1":
+                    return True
+
+                # Must be genuine msedge.exe - NEVER Antigravity.exe, Code.exe or electron.exe!
+                pid = wintypes.DWORD()
+                user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+                try:
+                    proc = psutil.Process(pid.value)
+                    if proc.name().lower() != "msedge.exe":
+                        return True
+                except Exception:
+                    return True
+
+                length = user32.GetWindowTextLengthW(hwnd)
+                if length <= 0:
+                    return True
+                buff = ctypes.create_unicode_buffer(length + 1)
+                user32.GetWindowTextW(hwnd, buff, length + 1)
+                t = buff.value.lower()
+                if any(bad in t for bad in ("eli", "antigravity", "visual studio")):
+                    return True
+
+                rect = wintypes.RECT()
+                user32.GetWindowRect(hwnd, ctypes.byref(rect))
+                if (rect.right - rect.left) < 200 or (rect.bottom - rect.top) < 200:
+                    return True
+
+                found_hwnds.append(hwnd)
+                return True
+
+            WNDENUMPROC = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_int, ctypes.c_int)
+            for _ in range(6):
+                user32.EnumWindows(WNDENUMPROC(enum_cb), 0)
+                if found_hwnds:
+                    break
+                time.sleep(0.3)
+
+            if found_hwnds:
+                hwnd = found_hwnds[0]
+                self._force_foreground(hwnd, maximize=maximize)
+                log.info("Force activated genuine Microsoft Edge window hwnd=%d to foreground (maximized=%s)", hwnd, maximize)
+                return True
+        except Exception as e:
+            log.debug("activate_edge failed: %s", e)
+        try:
+            if gw is not None:
+                for w in gw.getAllWindows():
+                    t = (w.title or "").lower()
+                    if "edge" in t and not any(bad in t for bad in ("eli", "antigravity", "visual studio")):
                         if w.isMinimized:
                             w.restore()
                         if maximize:
@@ -507,6 +655,7 @@ class AutomationAgent:
             log.debug("youtube video id scrape fallback: %s", e)
 
         # 2. Launch directly in Google Chrome with visual mouse glide, detached from Antigravity
+        self.is_media_playing = True
         self.visual_open_chrome(watch_url, query=clean)
 
         if auto_skip_ads:
@@ -681,6 +830,7 @@ class AutomationAgent:
 
     def stop_or_pause_media(self) -> str:
         ensure_interactive_desktop()
+        self.is_media_playing = False
         if os.name == "nt":
             try:
                 user32 = ctypes.windll.user32
@@ -703,6 +853,7 @@ class AutomationAgent:
 
     def resume_media(self) -> str:
         ensure_interactive_desktop()
+        self.is_media_playing = True
         if os.name == "nt":
             try:
                 user32 = ctypes.windll.user32
@@ -725,14 +876,88 @@ class AutomationAgent:
 
     def close_app_or_window(self, target: str = "") -> str:
         ensure_interactive_desktop()
-        if target:
+        self.is_media_playing = False
+        t_low = (target or "").lower().strip()
+
+        PROTECTED_APPS = ("antigravity", "visual studio", "code", "eli", "powershell", "terminal", "cmd")
+
+        # 1. Close active tab
+        if t_low in ("tab", "active tab", "current tab"):
+            fg_title = self._get_foreground_title().lower()
+            if any(p in fg_title for p in PROTECTED_APPS):
+                log.info("Refusing to send Ctrl+W to protected foreground window: %r", fg_title)
+                return "Kept your active workspace open for safety."
+            self.press_keys("ctrl+w")
+            return "Closed the active tab."
+
+        # 2. Close everything / all tabs / all windows
+        # STRICT SAFETY: ONLY terminate browsers; NEVER send blind Alt+F4 to desktop or Antigravity!
+        if any(k in t_low for k in ("everything", "all the tabs", "all tabs", "all windows")):
+            if os.name == "nt":
+                try:
+                    subprocess.run(["taskkill", "/F", "/IM", "chrome.exe"], capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
+                    subprocess.run(["taskkill", "/F", "/IM", "msedge.exe"], capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
+                    subprocess.run(["taskkill", "/F", "/IM", "firefox.exe"], capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
+                    subprocess.run(["taskkill", "/F", "/IM", "brave.exe"], capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
+                except Exception:
+                    pass
+            return "Closed all open browser tabs and windows."
+
+        # 3. Close Google Chrome
+        if "chrome" in t_low or t_low in ("google chrome", "browser"):
+            if os.name == "nt":
+                try:
+                    subprocess.run(["taskkill", "/F", "/IM", "chrome.exe"], capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
+                except Exception:
+                    pass
+            return "Closed Google Chrome."
+
+        # 4. Close Microsoft Edge
+        if "edge" in t_low or t_low in ("microsoft edge", "msedge"):
+            if os.name == "nt":
+                try:
+                    subprocess.run(["taskkill", "/F", "/IM", "msedge.exe"], capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
+                except Exception:
+                    pass
+            return "Closed Microsoft Edge."
+
+        # 5. Targeted window focus & close
+        if target and target not in ("window", "active window", "current window"):
+            if any(p in target.lower() for p in PROTECTED_APPS):
+                return f"Cannot close {target} because it is a protected system application."
             res = self.focus_window(target)
             if not res.startswith("No window"):
                 time.sleep(0.2)
-                self.press_keys("alt+f4")
-                return f"Closed {target}."
+                fg_title = self._get_foreground_title().lower()
+                if not any(p in fg_title for p in PROTECTED_APPS):
+                    self.press_keys("alt+f4")
+                    return f"Closed {target}."
+                return f"Kept {target} open for safety."
+
+        # 6. Generic active window close (strictly protected)
+        fg_title = self._get_foreground_title().lower()
+        if any(p in fg_title for p in PROTECTED_APPS):
+            log.info("Refusing to close protected foreground window: %r", fg_title)
+            return "Kept your active workspace open for safety."
+
         self.press_keys("alt+f4")
         return "Closed the active window."
+
+    def _get_foreground_title(self) -> str:
+        ensure_interactive_desktop()
+        if os.name == "nt":
+            try:
+                user32 = ctypes.windll.user32
+                hwnd = user32.GetForegroundWindow()
+                if hwnd:
+                    length = user32.GetWindowTextLengthW(hwnd)
+                    if length > 0:
+                        buff = ctypes.create_unicode_buffer(length + 1)
+                        user32.GetWindowTextW(hwnd, buff, length + 1)
+                        return buff.value
+            except Exception:
+                pass
+        return ""
 
     def click_dialog_button(self) -> str:
         ensure_interactive_desktop()
