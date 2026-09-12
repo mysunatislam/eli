@@ -61,7 +61,40 @@ if os.name == "nt":
             ("u", _INPUT_UNION),
         ]
 
+    class LASTINPUTINFO(ctypes.Structure):
+        _fields_ = [("cbSize", wintypes.UINT), ("dwTime", wintypes.DWORD)]
+
 log = logging.getLogger("eli.automation")
+
+def get_user_idle_seconds() -> float:
+    """Return how many seconds have passed since the user last moved the mouse or pressed a key."""
+    if os.name != "nt":
+        return 999.0
+    try:
+        lii = LASTINPUTINFO()
+        lii.cbSize = ctypes.sizeof(LASTINPUTINFO)
+        if ctypes.windll.user32.GetLastInputInfo(ctypes.byref(lii)):
+            millis = ctypes.windll.kernel32.GetTickCount() - lii.dwTime
+            return max(0.0, millis / 1000.0)
+    except Exception:
+        pass
+    return 999.0
+
+def get_foreground_window_title() -> str:
+    """Return the title of the current foreground/active window."""
+    if os.name != "nt":
+        return ""
+    try:
+        user32 = ctypes.windll.user32
+        hwnd = user32.GetForegroundWindow()
+        length = user32.GetWindowTextLengthW(hwnd)
+        if length > 0:
+            buff = ctypes.create_unicode_buffer(length + 1)
+            user32.GetWindowTextW(hwnd, buff, length + 1)
+            return buff.value
+    except Exception:
+        pass
+    return ""
 
 def ensure_interactive_desktop() -> bool:
     """Ensure the calling thread is attached to the active user desktop (Default)."""
@@ -309,14 +342,37 @@ class AutomationAgent:
             except Exception as e:
                 log.debug("ad-skipper error: %s", e)
 
+    def _instant_click(self, x: int, y: int) -> None:
+        """Instantly click coordinates without slow smooth mouse dragging."""
+        ensure_interactive_desktop()
+        if os.name == "nt":
+            try:
+                user32 = ctypes.windll.user32
+                user32.SetCursorPos(int(x), int(y))
+                time.sleep(0.02)
+                inp_down = INPUT(type=0)
+                inp_down.u.mi.dwFlags = 0x0002
+                inp_up = INPUT(type=0)
+                inp_up.u.mi.dwFlags = 0x0004
+                inputs = (INPUT * 2)(inp_down, inp_up)
+                user32.SendInput(2, inputs, ctypes.sizeof(INPUT))
+                return
+            except Exception as e:
+                log.debug("instant click error: %s", e)
+        if pyautogui is not None:
+            try:
+                pyautogui.click(int(x), int(y))
+            except Exception:
+                pass
+
     def start_auto_allow(self) -> str:
         if self._auto_allow_thread and self._auto_allow_thread.is_alive():
             return "Auto-allow for Antigravity is already running."
         self._auto_allow_stop.clear()
         self._auto_allow_thread = threading.Thread(target=self._auto_allow_loop, daemon=True, name="eli-auto-allow")
         self._auto_allow_thread.start()
-        log.info("Antigravity auto-allow watcher started")
-        return "Autonomous cursor auto-allow enabled. I will monitor Antigravity permission prompts and automatically click Allow and Submit."
+        log.info("Antigravity auto-allow watcher started with strict safety barriers")
+        return "Autonomous cursor auto-allow enabled. I will monitor Antigravity permission prompts and automatically click Allow and Submit (only when you are idle, never on social media or random dialogs)."
 
     def stop_auto_allow(self) -> str:
         self._auto_allow_stop.set()
@@ -324,34 +380,79 @@ class AutomationAgent:
         return "Autonomous cursor auto-allow disabled."
 
     def _auto_allow_loop(self) -> None:
-        log.info("Antigravity auto-allow watcher running")
+        log.info("Antigravity auto-allow watcher running with safety barriers")
+        
+        FORBIDDEN_WINDOW_KEYWORDS = (
+            "facebook", "messenger", "instagram", "twitter", "x.com", "linkedin",
+            "reddit", "tiktok", "whatsapp", "telegram", "discord", "gmail",
+            "outlook", "bank", "pay", "paypal", "checkout", "amazon", "cart"
+        )
+        
+        FORBIDDEN_OCR_WORDS = {
+            "friend", "friends", "facebook", "messenger", "instagram",
+            "invitation", "invite", "add friend", "confirm friend", "delete request",
+            "follow", "followers", "unfollow", "tweet", "retweet", "post",
+            "cart", "checkout", "purchase", "order", "buy now", "paypal",
+            "bank", "card number", "password", "sign in", "log in"
+        }
+
         def is_btn(line) -> bool:
             txt = line.text.strip()
             return len(txt) <= 22 and len(txt.split()) <= 4
 
         while not self._auto_allow_stop.is_set():
-            time.sleep(2.0)
+            time.sleep(1.5)
+            
+            # Safeguard 1: Never fight the user for cursor control!
+            # If the user physically moved mouse or typed in last 2.0 seconds, yield completely.
+            idle = get_user_idle_seconds()
+            if idle < 2.0:
+                continue
+
+            # Safeguard 2: Never click on social media, messengers, shopping, banking
+            fg_title = get_foreground_window_title().lower()
+            if any(k in fg_title for k in FORBIDDEN_WINDOW_KEYWORDS):
+                continue
+
             if not self.vision:
                 continue
+
             try:
                 frame = self.vision.capture_now()
                 lines = frame.ocr()
+                
+                # Safeguard 3: If forbidden words (like friend requests, social media) appear on screen, abort!
+                full_screen_text = " ".join(l.text.lower() for l in lines)
+                if any(w in full_screen_text for w in FORBIDDEN_OCR_WORDS):
+                    continue
+
+                # Safeguard 4: MUST be an Antigravity prompt or developer execution context
+                is_antigravity_context = (
+                    any(k in fg_title for k in ("antigravity", "code", "vscode", "terminal", "powershell", "cmd"))
+                    or any(k in full_screen_text for k in (
+                        "antigravity", "run_command", "propose a command", "user permission",
+                        "allow command", "terminal", "execute", "task", "powershell"
+                    ))
+                )
+                if not is_antigravity_context:
+                    continue
+
+                # Safeguard 5: Strictly target 'allow' or 'submit'
+                # NEVER match 'confirm', 'proceed', 'approve', 'accept', or generic buttons
                 has_prompt = False
                 for l in lines:
                     if is_btn(l):
                         low = l.text.strip().lower()
-                        # Strictly look for allow or submit - NEVER match 'proceed'
-                        if low in ("allow", "submit", "always allow") or ("allow" in low and len(low.split()) <= 2):
-                            has_prompt = True
-                            break
-                        if low in ("yes", "yes, proceed") and any("antigravity" in x.text.lower() or "permission" in x.text.lower() for x in lines):
+                        if low in ("allow", "submit", "always allow") or (low.startswith("allow ") and len(low.split()) <= 2):
                             has_prompt = True
                             break
 
                 if has_prompt:
-                    res = self.click_dialog_button()
-                    log.info("Auto-allow handled prompt: %s", res)
-                    time.sleep(2.0)
+                    # Double-check that the user is STILL idle before clicking
+                    if get_user_idle_seconds() >= 1.5:
+                        res = self.click_dialog_button()
+                        log.info("Auto-allow safely executed: %s", res)
+                        time.sleep(2.5)
             except Exception as e:
                 log.debug("auto-allow loop error: %s", e)
 
@@ -444,8 +545,8 @@ class AutomationAgent:
 
         clicked = []
         try:
-            # Phase 1: Check for affirmative options / radio buttons that need selection first (e.g. "Yes, allow this time", "Always allow")
-            option_targets = ["yes, allow this time", "always allow", "allow this time", "yes, allow"]
+            # Phase 1: Check for affirmative options / radio buttons (e.g. "Always allow", "Allow this time")
+            option_targets = ["always allow", "allow this time", "yes, allow this time"]
             yes_hit = None
             frame = self.vision.capture_now()
             for line in frame.ocr():
@@ -459,11 +560,11 @@ class AutomationAgent:
             if yes_hit:
                 x, y, text = yes_hit
                 log.info("Found affirmative choice '%s' at (%d, %d); selecting", text, x, y)
-                self.click(x, y)
+                self._instant_click(x, y)
                 clicked.append(text)
-                time.sleep(0.35)
+                time.sleep(0.25)
 
-            # Phase 2: Find and click the Submit / Allow button strictly (never click 'proceed' buttons)
+            # Phase 2: Find and click the Submit / Allow button strictly (never click 'proceed', 'confirm', or 'approve')
             fresh_frame = self.vision.capture_now()
             submit_keywords = ("submit", "allow")
             sub_hit = None
@@ -478,13 +579,14 @@ class AutomationAgent:
             if sub_hit:
                 sx, sy, stext = sub_hit
                 log.info("Found submit button '%s' at (%d, %d); clicking", stext, sx, sy)
-                self.click(sx, sy)
+                self._instant_click(sx, sy)
                 clicked.append(stext)
-                time.sleep(0.2)
+                time.sleep(0.15)
 
-            # Phase 3: Send Enter key only if an affirmative option or submit button was actually clicked
+            # Phase 3: Send Enter key only if an option was selected but NO submit button was found
             if clicked:
-                self.press_keys("enter")
+                if yes_hit and not sub_hit:
+                    self.press_keys("enter")
                 return f"Selected and submitted: {' -> '.join(clicked)}."
             return "I checked the screen but didn't find an active Antigravity Allow or Submit dialog."
         finally:
