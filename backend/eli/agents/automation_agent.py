@@ -374,16 +374,18 @@ class AutomationAgent:
         opened = False
         if chrome_exe:
             try:
+                creationflags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
                 subprocess.Popen(
-                    ["cmd.exe", "/c", "start", "", chrome_exe, "--start-maximized", "--new-window", url],
+                    [chrome_exe, "--start-maximized", "--new-window", url],
+                    creationflags=creationflags,
                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
                 )
                 opened = True
-                log.info("Launched Google Chrome detached via Windows shell: %s", url)
+                log.info("Launched Google Chrome directly (no black window): %s", url)
             except Exception as e:
-                log.debug("cmd start failed: %s; trying explorer", e)
+                log.debug("direct chrome launch failed: %s; trying os.startfile", e)
                 try:
-                    subprocess.Popen(["explorer.exe", url], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    os.startfile(url)
                     opened = True
                 except Exception:
                     pass
@@ -395,7 +397,7 @@ class AutomationAgent:
                 pass
 
         # 4. Bring window to active foreground in full screen (SW_MAXIMIZE)
-        time.sleep(0.8)
+        time.sleep(1.0)
         self.activate_chrome(maximize=True)
 
         # 5. Visually glide cursor smoothly to Chrome's search / address bar
@@ -409,17 +411,48 @@ class AutomationAgent:
         return True
 
     def activate_chrome(self, maximize: bool = True) -> bool:
-        """Finds any running Google Chrome window, restores/maximizes it into full screen, and brings it to the foreground."""
+        """Finds only genuine Google Chrome windows (strictly chrome.exe, excluding Antigravity and Electron dummy windows),
+        restores/maximizes it into full screen, and brings it to the foreground."""
         try:
+            import psutil
             user32 = ctypes.windll.user32
             found_hwnds = []
 
             def enum_cb(hwnd, extra):
-                if user32.IsWindowVisible(hwnd):
-                    cls_name = ctypes.create_unicode_buffer(256)
-                    user32.GetClassNameW(hwnd, cls_name, 256)
-                    if cls_name.value == "Chrome_WidgetWin_1":
-                        found_hwnds.append(hwnd)
+                if not user32.IsWindowVisible(hwnd):
+                    return True
+                cls_name = ctypes.create_unicode_buffer(256)
+                user32.GetClassNameW(hwnd, cls_name, 256)
+                if cls_name.value != "Chrome_WidgetWin_1":
+                    return True
+
+                # Must be genuine chrome.exe - NEVER Antigravity.exe, Code.exe or electron.exe!
+                pid = wintypes.DWORD()
+                user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+                try:
+                    proc = psutil.Process(pid.value)
+                    if proc.name().lower() != "chrome.exe":
+                        return True
+                except Exception:
+                    return True
+
+                # Must have a non-empty window title
+                length = user32.GetWindowTextLengthW(hwnd)
+                if length <= 0:
+                    return True
+                buff = ctypes.create_unicode_buffer(length + 1)
+                user32.GetWindowTextW(hwnd, buff, length + 1)
+                t = buff.value.lower()
+                if any(bad in t for bad in ("eli", "antigravity", "visual studio")):
+                    return True
+
+                # Must have real screen dimensions (not a zero-sized offscreen Chromium helper)
+                rect = wintypes.RECT()
+                user32.GetWindowRect(hwnd, ctypes.byref(rect))
+                if (rect.right - rect.left) < 200 or (rect.bottom - rect.top) < 200:
+                    return True
+
+                found_hwnds.append(hwnd)
                 return True
 
             WNDENUMPROC = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_int, ctypes.c_int)
@@ -428,7 +461,7 @@ class AutomationAgent:
             if found_hwnds:
                 hwnd = found_hwnds[0]
                 self._force_foreground(hwnd, maximize=maximize)
-                log.info("Force activated Google Chrome window hwnd=%d to foreground (maximized=%s)", hwnd, maximize)
+                log.info("Force activated genuine Google Chrome window hwnd=%d to foreground (maximized=%s)", hwnd, maximize)
                 return True
         except Exception as e:
             log.debug("activate_chrome failed: %s", e)
@@ -436,7 +469,7 @@ class AutomationAgent:
             if gw is not None:
                 for w in gw.getAllWindows():
                     t = (w.title or "").lower()
-                    if "chrome" in t or "youtube" in t:
+                    if ("chrome" in t or "youtube" in t) and not any(bad in t for bad in ("eli", "antigravity", "visual studio")):
                         if w.isMinimized:
                             w.restore()
                         if maximize:
@@ -494,6 +527,20 @@ class AutomationAgent:
             time.sleep(1.8)
             if not self.vision:
                 continue
+            # Gate ad-skipping strictly to when genuine Chrome is the active foreground window
+            if os.name == "nt":
+                try:
+                    import psutil
+                    user32 = ctypes.windll.user32
+                    fg = user32.GetForegroundWindow()
+                    if fg:
+                        pid = wintypes.DWORD()
+                        user32.GetWindowThreadProcessId(fg, ctypes.byref(pid))
+                        proc = psutil.Process(pid.value)
+                        if proc.name().lower() != "chrome.exe":
+                            continue
+                except Exception:
+                    pass
             try:
                 for label in ("Skip Ad", "Skip Ads", "Skip in", "Skip"):
                     hit = self.vision.find_text(label)
