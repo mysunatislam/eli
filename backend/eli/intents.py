@@ -135,7 +135,7 @@ PREF_RE = re.compile(
 def match(text: str):
     t = strip_wake(text).strip()
     if not t:
-        if re.search(r"\b(hello|hey|hi|good morning|good evening|howdy|yo)\b", text, re.I):
+        if re.search(r"\b(hello|hey|hi|good morning|good evening|howdy|yo|[iea]+l+[ieya]+|allie|ali|ally)\b", text, re.I):
             return "greeting", []
         return None
     for kind, rx in PATTERNS:

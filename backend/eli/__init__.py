@@ -5,4 +5,4 @@ Backend package: FastAPI server + four agents (main, vision, automation, memory)
 Claude API call used for reasoning and screen understanding.
 """
 
-__version__ = "0.3.1"
+__version__ = "0.4.2"

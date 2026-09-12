@@ -95,13 +95,13 @@ class WakeListener(threading.Thread):
                 time.sleep(0.3)
                 continue
             try:
-                # Fast wake capture: 5.0s max, 0.8s silence break, 3.5s wait timeout
-                audio = self.c.recorder.record(max_seconds=5.0, silence_seconds=0.8, wait_timeout=3.5)
+                # Fast wake capture: 6.0s max, 1.2s silence break, 3.5s wait timeout
+                audio = self.c.recorder.record(max_seconds=6.0, silence_seconds=1.2, wait_timeout=3.5)
             except Exception as e:
                 log.warning("wake listener mic error: %s", e)
                 time.sleep(1)
                 continue
-            if audio.size < 16000 * 0.25 or not self._active():
+            if audio.size < 16000 * 0.20 or not self._active():
                 continue
             text = self.c.transcriber.transcribe(audio)
             if not text:
@@ -123,40 +123,10 @@ class WakeListener(threading.Thread):
                 self.hub.set_state("listening")
                 self.hub.status(mic_live=True)
 
-                if rest.strip():
-                    log.info("dispatching direct voice command: %r", rest.strip())
-                    self.hub.toast(f'Heard: "{rest.strip()}"')
-                    self.c.dispatch(rest.strip(), "voice")
-                    continue
-
-                # Just the wake name was spoken: acknowledge and turn mic on for follow-up
-                self.hub.toast("Listening... (Mic ON)")
-                self.c.tts.say("Yes?")
-                while self.c.tts.speaking or not self.c.tts.q.empty():
-                    time.sleep(0.04)
-                # Acoustic settle to prevent speaker echo
-                time.sleep(0.3)
-
-                self.hub.set_state("listening")
-                self.hub.status(mic_live=True)
-                follow = self.c.recorder.record(max_seconds=25.0, silence_seconds=2.0, wait_timeout=10.0)
-                self.hub.status(mic_live=False)
-
-                if follow.size < 16000 * 0.35:
-                    log.info("follow-up audio too short, returning to idle")
-                    self.hub.toast("Mic timed out.")
-                    self.hub.set_state("idle")
-                    continue
-
-                self.hub.set_state("thinking")
-                said = self.c.transcriber.transcribe(follow)
-                log.info("follow-up transcribed: %r", said)
-                if said:
-                    self.hub.toast(f'Heard: "{said}"')
-                    self.c.dispatch(said, "voice")
-                else:
-                    self.hub.toast("I didn't catch that.")
-                    self.hub.set_state("idle")
+                cmd = rest.strip() if rest.strip() else text.strip()
+                log.info("dispatching voice command: %r", cmd)
+                self.hub.toast(f'Heard: "{cmd}"')
+                self.c.dispatch(cmd, "voice")
             finally:
                 self.hub.status(mic_live=False)
                 self.c.recording = False

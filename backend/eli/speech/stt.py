@@ -37,9 +37,8 @@ class Transcriber:
         return self._model is not None
 
     INITIAL_PROMPT = (
-        "Eli, Ellie, Elli, Ili, Ilii, Iliii, Iliiii, Iliiiii, Elii, Eliii, Ilai, Alai. "
-        "Hey Eli, Hey Ellie, Hey Elli, Hey Ili, Hey Iliiiii, Hello Ellie, Hello Elli, "
-        "Hi Ili, Hi Eli, Iliiii, Iliii, Ilii, Ili. Yes, Eli. Open VS Code, YouTube, Python, Bipolar disorder."
+        "Eli, Ellie, Elli. Hey Eli, Hey Ellie, Hey Elli. "
+        "Hello Eli, Hello Ellie, Hello Elli, Hi Eli. Yes, Eli. Open VS Code, YouTube, Python."
     )
 
     def transcribe(self, audio: np.ndarray) -> str:
@@ -50,8 +49,9 @@ class Transcriber:
             audio,
             beam_size=1,
             language="en",
-            vad_filter=True,
+            vad_filter=False,
             condition_on_previous_text=False,
+            no_speech_threshold=0.6,
             initial_prompt=self.INITIAL_PROMPT,
         )
         return " ".join(s.text.strip() for s in segments).strip()
