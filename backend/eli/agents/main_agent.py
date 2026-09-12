@@ -522,7 +522,8 @@ class MainAgent:
 
         # Immediate interrupt check: if the user says stop, cut speech and cancel IMMEDIATELY without waiting for lock
         low_t = text.lower().strip().strip(".!?,")
-        is_stop_cmd = (
+        is_keep_going = any(k in low_t for k in ("keep going", "continue", "till", "until", "don't stop", "dont stop", "didn't say stop", "didnt say stop", "keep monitoring", "keep continuing"))
+        is_stop_cmd = not is_keep_going and (
             low_t in ("stop", "eli stop", "ellie stop", "elii stop", "stop talking", "stop speaking", "be quiet", "shut up", "pause", "cancel", "abort", "halt", "quiet")
             or low_t.startswith("eli stop") or low_t.startswith("ellie stop") or low_t.startswith("elii stop")
             or "stop talking" in low_t or "stop speaking" in low_t or "be quiet" in low_t or "shut up" in low_t
@@ -540,6 +541,8 @@ class MainAgent:
                 pass
             self.hub.set_state("idle")
             return "Stopped immediately."
+        else:
+            self._abort_requested = False
 
         async with self.lock:
             self.memory.private = bool(self.settings.get("private_mode"))
@@ -646,6 +649,8 @@ class MainAgent:
             self.settings.set("auto_allow_antigravity", True)
             start_res = await asyncio.to_thread(a.start_auto_allow)
             btn_res = await asyncio.to_thread(a.click_dialog_button)
+            if "didn't find an active" in btn_res:
+                return "Continuous auto-allow is active. I will monitor Antigravity permission prompts and automatically click Allow and Submit (yielding whenever you move the mouse) until you tell me to stop."
             return f"{start_res} {btn_res}".strip()
         if kind == "auto_allow_off":
             self.settings.set("auto_allow_antigravity", False)

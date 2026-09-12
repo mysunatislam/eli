@@ -172,11 +172,13 @@ def match(text: str):
     if any(k in low for k in ("stop the task", "stop whatever it is working", "stop whatever you are working", "stop working immediately", "cancel the task")):
         return "stop_all", []
 
+    if any(k in low for k in ("keep going", "keep continuing", "keep monitoring", "till say stop", "until i say stop", "continue monitoring", "keep doing that", "i didnt say stop", "i didn't say stop")):
+        return "auto_allow_on", []
     if any(k in low for k in ("stop auto allow", "disable auto allow", "turn off auto allow", "turn off autonomous cursor", "disable autonomous cursor", "stop auto-allow")):
         return "auto_allow_off", []
     if any(k in low for k in ("start auto allow", "enable auto allow", "turn on auto allow", "turn on autonomous cursor", "enable autonomous cursor", "start auto-allow")):
         return "auto_allow_on", []
-    if ("allow" in low or "submit" in low) and any(k in low for k in ("antigravity", "dialog", "prompt", "away", "everytime", "every time", "always", "auto")):
+    if ("allow" in low or "submit" in low) and any(k in low for k in ("antigravity", "dialog", "prompt", "away", "everytime", "every time", "always", "auto", "whenever")):
         return "auto_allow_on", []
     if any(k in low for k in ("click allow", "allow", "click submit", "submit", "doesnt click submit", "click allow and submit", "press submit")):
         return "click_allow", []
