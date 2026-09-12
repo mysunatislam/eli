@@ -632,6 +632,78 @@ class AutomationAgent:
             pass
         return False
 
+    def activate_vscode(self, maximize: bool = True) -> bool:
+        """Finds genuine Visual Studio Code windows (code.exe, excluding Antigravity and Eli),
+        restores/maximizes it into full screen, and brings it to the foreground."""
+        ensure_interactive_desktop()
+        try:
+            import psutil
+            user32 = ctypes.windll.user32
+            found_hwnds = []
+
+            def enum_cb(hwnd, extra):
+                if not user32.IsWindowVisible(hwnd):
+                    return True
+                pid = wintypes.DWORD()
+                user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+                try:
+                    proc = psutil.Process(pid.value)
+                    pname = proc.name().lower()
+                    if pname != "code.exe" and not pname.startswith("code"):
+                        return True
+                except Exception:
+                    return True
+
+                length = user32.GetWindowTextLengthW(hwnd)
+                if length <= 0:
+                    return True
+                buff = ctypes.create_unicode_buffer(length + 1)
+                user32.GetWindowTextW(hwnd, buff, length + 1)
+                t = buff.value.lower()
+                if any(bad in t for bad in ("eli", "antigravity")):
+                    return True
+
+                rect = wintypes.RECT()
+                user32.GetWindowRect(hwnd, ctypes.byref(rect))
+                if (rect.right - rect.left) < 200 or (rect.bottom - rect.top) < 200:
+                    return True
+
+                found_hwnds.append(hwnd)
+                return True
+
+            WNDENUMPROC = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_int, ctypes.c_int)
+            for _ in range(6):
+                user32.EnumWindows(WNDENUMPROC(enum_cb), 0)
+                if found_hwnds:
+                    break
+                time.sleep(0.3)
+
+            if found_hwnds:
+                hwnd = found_hwnds[0]
+                self._force_foreground(hwnd, maximize=maximize)
+                log.info("Force activated Visual Studio Code window hwnd=%d to foreground (maximized=%s)", hwnd, maximize)
+                return True
+        except Exception as e:
+            log.debug("activate_vscode failed: %s", e)
+        try:
+            if gw is not None:
+                for w in gw.getAllWindows():
+                    t = (w.title or "").lower()
+                    if ("visual studio code" in t or " - code" in t) and not any(bad in t for bad in ("eli", "antigravity")):
+                        if w.isMinimized:
+                            w.restore()
+                        if maximize:
+                            try:
+                                w.maximize()
+                            except Exception:
+                                pass
+                        w.activate()
+                        self._force_foreground(w._hWnd, maximize=maximize)
+                        return True
+        except Exception:
+            pass
+        return False
+
     def play_youtube(self, query: str, auto_skip_ads: bool = True) -> str:
         clean = re.sub(r"^(?:play|search for|listen to|play music|play the music|the music|music|the song|song|a music|a video of among them|video of among them|video|video of)\s+", "", query, flags=re.I).strip()
         clean = re.sub(r"\s+(?:and play a video of among them|and play a video|and play it|and play|please|video)$", "", clean, flags=re.I).strip()
@@ -1027,6 +1099,75 @@ class AutomationAgent:
             return "I checked the screen but didn't find an active Antigravity Allow or Submit dialog."
         finally:
             # Instantly restore cursor to where the user had it
+            if orig_pos and os.name == "nt":
+                try:
+                    ctypes.windll.user32.SetCursorPos(orig_pos[0], orig_pos[1])
+                except Exception:
+                    pass
+
+    def click_trust_dialog(self) -> str:
+        """Detects and automatically clicks VS Code folder or workspace trust dialogs
+        ('Yes, I trust the authors', 'Trust Folder & Continue', 'Trust Folder', 'Trust', 'OK')."""
+        ensure_interactive_desktop()
+        if not self.vision:
+            return "Vision agent not available."
+
+        orig_pos = None
+        if os.name == "nt":
+            try:
+                user32 = ctypes.windll.user32
+                pt = wintypes.POINT()
+                user32.GetCursorPos(ctypes.byref(pt))
+                orig_pos = (pt.x, pt.y)
+            except Exception:
+                pass
+
+        try:
+            trust_targets = [
+                "yes, i trust",
+                "trust the authors",
+                "trust folder & continue",
+                "trust folder",
+                "trust workspace",
+                "manage workspace trust",
+                "trust",
+                "ok"
+            ]
+
+            def is_target(line_text: str) -> bool:
+                lt = line_text.strip().lower()
+                return any(tgt in lt for tgt in trust_targets) and len(lt) <= 35 and len(lt.split()) <= 6
+
+            for attempt in range(3):
+                frame = self.vision.capture_now()
+                lines = frame.ocr()
+                has_trust_context = any("trust" in l.text.lower() for l in lines)
+
+                target_hit = None
+                for line in lines:
+                    if is_target(line.text):
+                        bx, by, bw, bh = line.box
+                        if bw > 0 and bh > 0:
+                            lt = line.text.strip().lower()
+                            priority = 10 if ("yes, i trust" in lt or "trust the authors" in lt) else 5 if "trust" in lt else 1
+                            if target_hit is None or priority > target_hit[3]:
+                                target_hit = (bx + bw // 2, by + bh // 2, line.text.strip(), priority)
+
+                if target_hit:
+                    if target_hit[3] == 1 and not has_trust_context:
+                        time.sleep(0.4)
+                        continue
+
+                    tx, ty, ttext, _ = target_hit
+                    log.info("Found trust dialog button '%s' at (%d, %d); clicking", ttext, tx, ty)
+                    self._instant_click(tx, ty)
+                    time.sleep(0.3)
+                    return f"Accepted folder trust dialog ('{ttext}')."
+
+                time.sleep(0.5)
+
+            return "No folder trust prompt was visible."
+        finally:
             if orig_pos and os.name == "nt":
                 try:
                     ctypes.windll.user32.SetCursorPos(orig_pos[0], orig_pos[1])

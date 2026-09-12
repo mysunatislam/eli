@@ -158,8 +158,32 @@ def is_user_complaint_wrong_action(text: str) -> bool:
         "told you to close", "not to search", "why did you search",
         "went to google chrome and search", "not to search why",
         "commanded the google chrome not to search",
-        "didn't understand", "keeps executing in a loop", "keeps listening again"
+        "didn't understand", "keeps executing in a loop", "keeps listening again",
+        "you are so dumb", "so dumb", "disappointed on you", "disappointed in you",
+        "what i asked is not", "what i asked is not the site", "not the site in google chrome",
+        "this is what it is doing", "this isnt something i wanted", "this isn't something i wanted",
+        "not what i asked", "not what i wanted", "did not ask you to", "didn't ask you to",
+        "didnt ask you to", "why are you searching", "why did you open chrome", "why did you open google"
     ))
+
+
+def extract_vscode_code_request(text: str) -> Optional[tuple[str, list[str]]]:
+    t = text.lower().strip().strip(".!?,")
+    has_vscode = any(k in t for k in ("vs code", "vscode", "visual studio code", "js code", "the editor", "code in my laptop"))
+    has_code_action = any(k in t for k in (
+        "write a code", "write code", "writing a code", "writing code",
+        "create code", "start writing", "code in there", "start coding",
+        "make a code", "write a", "writing a", "open js code in my laptop and write a code"
+    ))
+    has_refresh = any(k in t for k in ("refresh me", "refresh", "relaxing", "relax", "calm"))
+
+    if not (has_vscode and (has_code_action or has_refresh)):
+        return None
+
+    topic = "refresh me" if has_refresh else "sample code"
+    lang = "python"
+    auto_trust = any(k in t for k in ("trust", "accept", "ok button", "allow", "yes", "permission", "question like do you trust"))
+    return "write_code_vscode", [topic, lang, str(auto_trust)]
 
 
 def is_user_complaint_not_playing(text: str) -> bool:
@@ -291,14 +315,23 @@ def extract_youtube_request(text: str) -> Optional[dict]:
 
 def extract_browser_search_request(text: str) -> Optional[dict]:
     t = text.lower().strip().strip(".!?,")
+    if is_user_complaint_wrong_action(t):
+        return None
+    if extract_vscode_code_request(t) is not None:
+        return None
     if any(k in t for k in (
         "you lie", "you lied", "didn't", "didnt", "why did you", "youtube", "song", "music", "video",
         "close", "shut", "kill", "stop", "pause", "exit", "quit", "cancel", "submit", "allow", "antigravity",
-        "not to search", "wanted you to close"
+        "not to search", "wanted you to close", "in my laptop", "write a code", "write code", "writing a code",
+        "vs code", "vscode", "js code", "on your phone"
     )):
         return None
 
     if not any(k in t for k in ("search", "google", "look up", "find", "open chatgpt", "go to chatgpt", "chrome", "edge")):
+        return None
+
+    # Multi-step conjunctions are task instructions, not web searches
+    if any(c in t for c in (" and go ", " and start ", " and write ", " there will be ", " you have to ", " you had to ")):
         return None
 
     want_edge = any(k in t for k in ("microsoft edge", "edge browser", "edge"))
@@ -333,6 +366,10 @@ def extract_browser_search_request(text: str) -> Optional[dict]:
     # Capitalize ChatGPT if query is chatgpt
     if clean.lower() == "chatgpt":
         clean = "ChatGPT"
+
+    # Reject if query is too long or contains desktop app targets
+    if len(clean.split()) > 8 or any(k in clean.lower() for k in ("vs code", "vscode", "js code", "in my laptop", "write a code", "write code")):
+        return None
 
     if clean and clean not in ("chrome", "google chrome", "browser", "google", "the web", "online", "internet", "edge", "microsoft edge"):
         return {"query": clean, "engine": "google", "browser": browser, "open_chrome": browser == "chrome", "open_edge": browser == "edge"}
@@ -387,6 +424,11 @@ def match(text: str):
             return "youtube_ask_song", []
         elif yt_req.get("query"):
             return "youtube", [yt_req["query"]]
+
+    # 5b. Dedicated VS Code code creation request (strictly prioritized before browser search)
+    vscode_req = extract_vscode_code_request(t)
+    if vscode_req:
+        return vscode_req
 
     # 6. Compound or natural browser search request (with Edge and Chrome support)
     search_req = extract_browser_search_request(t)

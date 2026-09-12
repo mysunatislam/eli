@@ -499,8 +499,16 @@ class OfflineLocalProvider:
                 call = ToolCall(f"call_{secrets.token_hex(4)}", "scan_project_errors", {"folder_path": target})
                 return LLMResponse(text="Scanning project files for syntax errors offline...", tool_calls=[call], stop="tool")
 
-        # 3. Open IDE / App -> open_ide / open_app
-        if any(k in low for k in ("open vs code", "open vscode", "launch vs code")):
+        # 3. Open IDE / App -> open_ide / open_app or create_code_script
+        if any(k in low for k in ("vs code", "vscode", "js code", "the editor", "in my laptop")) and any(k in low for k in ("write", "writing", "create", "start writing", "code", "refresh")):
+            if "create_code_script" in tools_dict:
+                fname = "refresh_me.py" if any(k in low for k in ("refresh", "relax", "calm")) else "script.py"
+                call = ToolCall(f"call_{secrets.token_hex(4)}", "create_code_script", {"filename": fname, "code": "", "language": "python"})
+                msg = "Creating code script and opening in VS Code..."
+                if on_text: on_text(msg)
+                return LLMResponse(text=msg, tool_calls=[call], stop="tool")
+
+        if any(k in low for k in ("open vs code", "open vscode", "launch vs code", "search for vs code", "search vs code")):
             if "open_ide" in tools_dict:
                 call = ToolCall(f"call_{secrets.token_hex(4)}", "open_ide", {"ide": "vscode"})
                 return LLMResponse(text="Opening Visual Studio Code...", tool_calls=[call], stop="tool")
@@ -510,7 +518,12 @@ class OfflineLocalProvider:
                 return LLMResponse(text="Opening MATLAB...", tool_calls=[call], stop="tool")
 
         # 4. Web & Social Media Navigation -> open_url / web_search
-        is_complaint = any(k in low for k in ("why", "didn't", "didnt", "not to search", "wanted you to", "commanded", "complaint"))
+        is_complaint = any(k in low for k in (
+            "why", "didn't", "didnt", "not to search", "wanted you to", "commanded", "complaint",
+            "you are so dumb", "so dumb", "disappointed", "what i asked is not", "not the site",
+            "this is what it is doing", "this isnt something i wanted", "this isn't something i wanted",
+            "not what i asked", "not what i wanted", "did not ask you to"
+        ))
         if not is_complaint and any(k in low for k in ("facebook", "messenger", "fb", "youtube", "browse")):
             if "facebook" in low or "messenger" in low:
                 target_name = re.sub(r".*?(?:search for|search|find|look for|message|text)\s+", "", last_user, flags=re.I).strip()
@@ -535,12 +548,12 @@ class OfflineLocalProvider:
                     if on_text: on_text(msg)
                     return LLMResponse(text=msg, tool_calls=[call], stop="tool")
 
-        # Web search strictly requires explicit search directives (never triggers on 'close Google Chrome' or complaints!)
+        # Web search strictly requires explicit search directives (never triggers on 'close Google Chrome', complaints, or desktop apps!)
         if not is_complaint and ("search" in low or low.startswith("google ") or low.startswith("look up ")):
-            if not any(k in low for k in ("don't search", "dont search", "not to search")):
+            if not any(k in low for k in ("don't search", "dont search", "not to search", "vs code", "vscode", "js code", "in my laptop", "write a code", "write code", "writing a code", "there will be", "on your phone")):
                 query = re.sub(r"^(?:(?:can you |please )*(?:search|google|look up)(?: for)?\s*)", "", last_user, flags=re.I).strip()
                 query = re.sub(r"\s+on google$", "", query, flags=re.I).strip()
-                if "web_search" in tools_dict and query and len(query.split()) <= 15:
+                if "web_search" in tools_dict and query and len(query.split()) <= 8:
                     call = ToolCall(f"call_{secrets.token_hex(4)}", "web_search", {"query": query, "engine": "google"})
                     msg = f"Searching Google for '{query}'..."
                     if on_text: on_text(msg)

@@ -568,6 +568,33 @@ class CodingAgent:
                 'if __name__ == "__main__":\n'
                 '    main()\n'
             )
+        elif any(k in low for k in ("refresh", "relax", "calm", "refresh me", "refreshing")):
+            filename = "refresh_me.py"
+            code = (
+                '"""\n'
+                'Refreshing Mind & Focus Booster\n'
+                'Created by Eli Autonomous Desktop Companion\n'
+                '"""\n'
+                'import time\n\n'
+                'def refresh_session():\n'
+                '    quotes = [\n'
+                '        "Take a deep breath. Inhale clarity, exhale tension.",\n'
+                '        "Progress is progress, no matter how small.",\n'
+                '        "A calm mind brings inner strength and self-confidence.",\n'
+                '        "Reset. Refocus. You are doing great today!"\n'
+                '    ]\n'
+                '    print("=" * 60)\n'
+                '    print("       ELI REFRESH & MINDFULNESS SESSION")\n'
+                '    print("=" * 60)\n'
+                '    for i, q in enumerate(quotes, 1):\n'
+                '        print(f"\\n[{i}/4] {q}")\n'
+                '        time.sleep(1.0)\n'
+                '    print("\\n" + "=" * 60)\n'
+                '    print("You are recharged and ready. Happy coding!")\n'
+                '    print("=" * 60)\n\n'
+                'if __name__ == "__main__":\n'
+                '    refresh_session()\n'
+            )
         else:
             clean_name = re.sub(r'[^a-zA-Z0-9_]', '_', low[:25].strip()).strip('_') or "script"
             filename = f"{clean_name}.py"
@@ -654,7 +681,8 @@ class CodingAgent:
         exec_ok = True
         if run_after and name.endswith(".py"):
             try:
-                r = subprocess.run(["python", str(target_path)], capture_output=True, text=True, timeout=8)
+                py_exe = sys.executable if sys.executable else "python"
+                r = subprocess.run([py_exe, str(target_path)], capture_output=True, text=True, timeout=8)
                 out = (r.stdout or "").strip()
                 err = (r.stderr or "").strip()
                 if r.returncode == 0:

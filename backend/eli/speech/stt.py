@@ -47,6 +47,10 @@ def normalize_speech_text(text: str) -> str:
     # Fix "search for t" or "search for tea" when in search / browser context
     t = re.sub(r"\b(search(?:\s+for)?)\s+(?:t|tea|tee)\b", r"\1 ChatGPT", t, flags=re.I)
 
+    # 8. Fix VS Code acoustic mishearings ("js code", "j s code", "just code", "ds code")
+    t = re.sub(r"\b(?:js|j\s+s|just|ds)\s+code\b", "VS Code", t, flags=re.I)
+    t = re.sub(r"\bvs\s+code\b", "VS Code", t, flags=re.I)
+
     t = re.sub(r"\s+", " ", t).strip()
     return t
 

@@ -693,9 +693,69 @@ class MainAgent:
             if self.speech and hasattr(self.speech, "wake") and self.speech.wake:
                 self.speech.wake.enter_standby()
             return res
+        if kind == "write_code_vscode":
+            topic = groups[0] if groups else "refresh me"
+            lang = groups[1] if len(groups) > 1 else "python"
+            auto_trust = (groups[2].lower() == "true") if len(groups) > 2 else True
+
+            # Ensure any errantly opened browser is closed
+            await asyncio.to_thread(a.close_app_or_window, "Google Chrome")
+
+            # 1. Create and open script in VS Code
+            res_msg = await self._create_and_open_script_intent(lang, topic)
+
+            # 2. Bring VS Code to foreground in full screen
+            await asyncio.sleep(0.8)
+            await asyncio.to_thread(a.activate_vscode, True)
+
+            # 3. Handle folder trust prompt if requested
+            if auto_trust:
+                await asyncio.sleep(1.0)
+                trust_res = await asyncio.to_thread(a.click_trust_dialog)
+                if "Accepted" in trust_res:
+                    res_msg += f" {trust_res}"
+
+            if self.speech and hasattr(self.speech, "wake") and self.speech.wake:
+                self.speech.wake.enter_standby()
+            return res_msg
         if kind == "user_complaint_wrong_action":
             await asyncio.to_thread(a.close_app_or_window, "everything")
             await asyncio.to_thread(a.stop_or_pause_media)
+
+            # Check if user complaint explicitly specifies an intended action (e.g. open VS Code and write code)
+            v_req = intents.extract_vscode_code_request(raw)
+            if v_req:
+                topic = v_req[1][0] if v_req[1] else "refresh me"
+                lang = v_req[1][1] if len(v_req[1]) > 1 else "python"
+                auto_trust = (v_req[1][2].lower() == "true") if len(v_req[1]) > 2 else True
+
+                # Check if prior context mentioned refresh / relax
+                if topic == "sample code":
+                    for h in reversed(self.history):
+                        if h.get("role") == "user":
+                            for p in h.get("parts", []):
+                                utxt = p.get("text", "").lower()
+                                if any(k in utxt for k in ("refresh", "relax", "calm")):
+                                    topic = "refresh me"
+                                    break
+                            if topic != "sample code":
+                                break
+
+                res_msg = await self._create_and_open_script_intent(lang, topic)
+                await asyncio.sleep(0.8)
+                await asyncio.to_thread(a.activate_vscode, True)
+                if auto_trust:
+                    await asyncio.sleep(1.0)
+                    trust_res = await asyncio.to_thread(a.click_trust_dialog)
+                    if "Accepted" in trust_res:
+                        res_msg += f" {trust_res}"
+
+                if self.speech:
+                    self.speech.stop_speaking()
+                    if hasattr(self.speech, "wake") and self.speech.wake:
+                        self.speech.wake.enter_standby()
+                return f"I apologize for the misunderstanding earlier. I closed Google Chrome and cancelled the search. {res_msg}"
+
             if self.speech:
                 self.speech.stop_speaking()
                 if hasattr(self.speech, "wake") and self.speech.wake:
