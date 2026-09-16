@@ -557,14 +557,15 @@ async def ws_astha(ws: WebSocket, token: str = Query("")):
                     code_match = re.search(r"```(?:python)?\s*\n([\s\S]*?)\n```", gen)
                     code = code_match.group(1).strip() if code_match else gen.strip()
                 result = await asyncio.to_thread(coding.create_code_script, filename, code, msg.get("language", "python"), run_after=msg.get("run", True))
+                target_label = "MATLAB" if filename.endswith(".m") else "VS Code"
                 await ws.send_json({
                     "type": "code_task_result",
                     "ok": result.get("ok", False),
                     "summary": result.get("summary", ""),
                     "output": result.get("execution_output", ""),
                     "path": result.get("path", ""),
-                    "en": f"Script {filename} created, syntax verified, and opened in VS Code.",
-                    "bn": f"ভিএস কোডে {filename} স্ক্রিপ্ট তৈরি এবং রান করা সম্পন্ন হয়েছে।"
+                    "en": f"Script {filename} created, syntax verified, and opened in {target_label}.",
+                    "bn": f"{target_label}-এ {filename} স্ক্রিপ্ট তৈরি এবং রান করা সম্পন্ন হয়েছে।"
                 })
             elif mtype in ("command", "user_text"):
                 text = msg.get("text", "")
