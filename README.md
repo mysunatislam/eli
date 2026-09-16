@@ -1,5 +1,7 @@
 # Eli — a persistent AI companion that lives on your desktop
 
+> 🌐 **Live 3D Personas Showcase & Interactive Lineup:** [**https://mysunatislam.github.io/eli/**](https://mysunatislam.github.io/eli/)
+
 Eli is a small animated heart that floats above every window on your Windows PC. It sees the screen
 when you allow it, listens ("Hey Eli"), talks, remembers you across sessions, controls the computer
 with your approval, and pairs with your phone. Version 0.2 turns the MVP into a multi-agent
