@@ -182,6 +182,16 @@ APP_COMMANDS: dict[str, list[list[str]]] = {
     "slack": [["slack"]],
     "blender": [["blender"]],
     "fusion 360": [[f"{LOCALAPPDATA}\\Autodesk\\webdeploy\\production\\Autodesk Fusion 360.exe"], ["fusion360"]],
+    "matlab": [
+        [r"E:\Matlab911Win\bin\matlab.exe", "-desktop"],
+        [f"{PROGRAMFILES}\\MATLAB\\R2021b\\bin\\matlab.exe", "-desktop"],
+        [f"{PROGRAMFILES}\\MATLAB\\R2022a\\bin\\matlab.exe", "-desktop"],
+        [f"{PROGRAMFILES}\\MATLAB\\R2022b\\bin\\matlab.exe", "-desktop"],
+        [f"{PROGRAMFILES}\\MATLAB\\R2023a\\bin\\matlab.exe", "-desktop"],
+        [f"{PROGRAMFILES}\\MATLAB\\R2023b\\bin\\matlab.exe", "-desktop"],
+        [f"{PROGRAMFILES}\\MATLAB\\R2024a\\bin\\matlab.exe", "-desktop"],
+        ["matlab", "-desktop"],
+    ],
 }
 APP_ALIASES = {
     "google chrome": "chrome", "browser": "chrome", "the browser": "chrome",
@@ -190,12 +200,14 @@ APP_ALIASES = {
     "microsoft edge": "edge", "calc": "calculator", "cmd": "command prompt", "windows terminal": "terminal",
     "ms word": "word", "microsoft word": "word", "ms excel": "excel", "microsoft excel": "excel",
     "ms paint": "paint", "fusion": "fusion 360", "fusion360": "fusion 360",
+    "matlab app": "matlab", "matlab r2021b": "matlab", "mathworks matlab": "matlab",
 }
 # Window-title keywords used to confirm an app came up / to focus it
 APP_WINDOW_KEYWORDS = {
     "chrome": "Chrome", "vs code": "Visual Studio Code", "notepad": "Notepad", "file explorer": "File Explorer",
     "edge": "Edge", "calculator": "Calculator", "terminal": "Terminal", "command prompt": "Command Prompt",
     "powershell": "PowerShell", "paint": "Paint", "word": "Word", "excel": "Excel", "outlook": "Outlook",
+    "matlab": "MATLAB",
 }
 URL_SHORTCUTS = {
     "youtube": "https://www.youtube.com", "gmail": "https://mail.google.com", "google": "https://www.google.com",
@@ -303,9 +315,20 @@ class AutomationAgent:
             try:
                 if any(kw in (w.title or "").lower() for w in gw.getAllWindows()):
                     return True
+                fg = get_foreground_window_title().lower()
+                if kw in fg:
+                    return True
             except Exception:
                 pass
             time.sleep(0.25)
+        # Fallback: check if process is running
+        try:
+            import psutil
+            for p in psutil.process_iter(["name"]):
+                if kw in (p.info.get("name") or "").lower():
+                    return True
+        except Exception:
+            pass
         return False
 
     def open_url(self, url: str) -> str:

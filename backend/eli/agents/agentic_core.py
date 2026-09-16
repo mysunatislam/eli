@@ -158,47 +158,75 @@ class ActionVerifier:
         return VerificationResult(passed=True, observations=obs[:150])
 
     def verify_window_open(self, app_or_keyword: str) -> VerificationResult:
-        """Verifies that an application window actually exists and is registered in the OS."""
-        time.sleep(0.5)  # brief grace period for window creation
-        try:
-            windows = self.auto.list_windows()
-            low_keyword = app_or_keyword.lower().strip()
-            # Canonical aliases
-            keyword_map = {
-                "vs code": "code",
-                "vscode": "code",
-                "visual studio code": "code",
-                "matlab": "matlab",
-                "chrome": "chrome",
-                "notepad": "notepad",
-                "explorer": "explorer",
-                "file explorer": "explorer"
-            }
-            search_term = keyword_map.get(low_keyword, low_keyword)
+        """Verifies that an application window actually exists and is registered in the OS,
+        polling up to 6 seconds for heavy desktop applications (e.g. MATLAB, VS Code)."""
+        low_keyword = app_or_keyword.lower().strip()
+        keyword_map = {
+            "vs code": "code",
+            "vscode": "code",
+            "visual studio code": "code",
+            "matlab": "matlab",
+            "chrome": "chrome",
+            "google chrome": "chrome",
+            "notepad": "notepad",
+            "explorer": "explorer",
+            "file explorer": "explorer"
+        }
+        search_term = keyword_map.get(low_keyword, low_keyword)
+        proc_names = {
+            "code": ["code.exe"],
+            "matlab": ["matlab.exe"],
+            "chrome": ["chrome.exe"],
+            "notepad": ["notepad.exe"],
+            "explorer": ["explorer.exe"]
+        }.get(search_term, [f"{search_term}.exe"])
 
-            for w in windows:
-                if search_term in w.lower() or low_keyword in w.lower():
+        # Heavy apps get up to 6 seconds of polling for window creation
+        max_wait = 6.0 if search_term in ("matlab", "code") else 2.0
+        start_time = time.time()
+        last_windows = []
+
+        while time.time() - start_time < max_wait:
+            try:
+                windows = self.auto.list_windows()
+                last_windows = windows
+                for w in windows:
+                    if search_term in w.lower() or low_keyword in w.lower():
+                        return VerificationResult(
+                            passed=True,
+                            observations=f"Window verified open: '{w}'"
+                        )
+
+                # Also check foreground window
+                cur = self.vision.user_window()
+                if cur and (search_term in cur.describe().lower() or low_keyword in cur.describe().lower()):
                     return VerificationResult(
                         passed=True,
-                        observations=f"Window verified open: '{w}'"
+                        observations=f"Active window verified: '{cur.describe()}'"
                     )
+            except Exception:
+                pass
+            time.sleep(0.5)
 
-            # Also check foreground window
-            cur = self.vision.user_window()
-            if cur and (search_term in cur.describe().lower() or low_keyword in cur.describe().lower()):
-                return VerificationResult(
-                    passed=True,
-                    observations=f"Active window verified: '{cur.describe()}'"
-                )
+        # Check if process is running even if window is still rendering/loading
+        try:
+            import psutil
+            for p in psutil.process_iter(["name", "pid"]):
+                pname = (p.info.get("name") or "").lower()
+                if any(target in pname for target in proc_names) or search_term in pname:
+                    return VerificationResult(
+                        passed=True,
+                        observations=f"Process '{pname}' (PID {p.info.get('pid')}) is active and initializing desktop window."
+                    )
+        except Exception:
+            pass
 
-            return VerificationResult(
-                passed=False,
-                observations=f"No window found matching '{app_or_keyword}'. Available windows: {', '.join(windows[:5])}",
-                diagnosis="Application did not open or failed to create a top-level window.",
-                suggested_action=f"Check executable path for {app_or_keyword} or launch via shell."
-            )
-        except Exception as e:
-            return VerificationResult(passed=False, observations=str(e), diagnosis=f"Window verification exception: {e}")
+        return VerificationResult(
+            passed=False,
+            observations=f"No window or running process found matching '{app_or_keyword}'. Available windows: {', '.join(last_windows[:5])}",
+            diagnosis=f"Application '{app_or_keyword}' did not launch or failed to create a window.",
+            suggested_action=f"Check executable path for {app_or_keyword} or launch via shell."
+        )
 
     def verify_file(self, path: str, check_syntax: bool = True) -> VerificationResult:
         """Verifies that a file exists, is non-empty, and possesses valid language syntax."""
@@ -442,6 +470,8 @@ class AgenticOrchestrator:
                 log.exception("Correction execution error: %s", e)
 
         log.warning("Step '%s' exhausted %d self-correction attempts.", step.id, step.max_retries)
+        if not v_res.passed:
+            step.result = f"[Verification: FAILED] {v_res.diagnosis or v_res.observations}\nOriginal Result: {step.result}"
         return v_res
 
     def record_successful_resolution(self, goal: str, summary: str, tools: list[str]) -> None:

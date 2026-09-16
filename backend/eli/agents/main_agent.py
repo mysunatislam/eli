@@ -346,7 +346,7 @@ class ToolExecutor:
                 folder=str(args.get("folder", "")),
                 run_after=bool(args.get("run_after", True))
             )
-            return ToolResult(res.get("summary", "Created and opened script in VS Code."), not res.get("ok", True))
+            return ToolResult(res.get("summary", "Created and opened script."), not res.get("ok", True))
         if name == "dismiss_interferences":
             return ToolResult(a.dismiss_interferences())
         if name == "check_code_errors":
@@ -757,6 +757,13 @@ class MainAgent:
             if self.speech and hasattr(self.speech, "wake") and self.speech.wake:
                 self.speech.wake.enter_standby()
             return res
+        if kind == "write_code_matlab":
+            topic = groups[0] if groups else "generate thumbnail"
+            lang = "matlab"
+            res_msg = await self._create_and_open_script_intent(lang, topic)
+            if self.speech and hasattr(self.speech, "wake") and self.speech.wake:
+                self.speech.wake.enter_standby()
+            return res_msg
         if kind == "write_code_vscode":
             topic = groups[0] if groups else "refresh me"
             lang = groups[1] if len(groups) > 1 else "python"
@@ -1011,19 +1018,24 @@ class MainAgent:
         await asyncio.to_thread(self.auto.dismiss_interferences)
 
         has_errors_req = any(k in topic.lower() for k in ("error", "errors", "bug", "bugs", "fault", "broken", "syntax error"))
-        filename = "sample_code_with_errors.py" if has_errors_req else "hello_world.py"
+        is_matlab = (lang.lower() == "matlab") or topic.lower().endswith(".m") or any(k in topic.lower() for k in ("matlab", "thumbnail", "thumb"))
+        if is_matlab:
+            lang = "matlab"
+            filename = "generate_thumbnail.m" if any(k in topic.lower() for k in ("thumb", "thumbnail", "image")) else "sample_code.m"
+        else:
+            filename = "sample_code_with_errors.py" if has_errors_req else "hello_world.py"
         code = ""
-        if self.llm.available:
+        target_editor = "MATLAB" if is_matlab else "VS Code"
+        if getattr(self.llm, "available", False) and not getattr(self.llm, "is_offline", False) and getattr(self.llm, "name", "") != "offline":
             if has_errors_req:
                 prompt = (
-                    f"Write a {lang} script that contains realistic, intentional errors (such as an undefined variable, a Type error, or an off-by-one/ZeroDivision error) so the user can inspect and diagnose them in VS Code. "
+                    f"Write a {lang} script that contains realistic, intentional errors (such as an undefined variable, a Type error, or an off-by-one/ZeroDivision error) so the user can inspect and diagnose them in {target_editor}. "
                     "Make the code look like a genuine application script with functions. "
                     f"Output ONLY the source code inside ```{lang} ... ``` code fences."
                 )
             else:
                 prompt = (
-                    f"Write a complete, high-quality, production-grade {lang} script for: '{topic or 'Hello World and core utility demonstration'}'. "
-                    "Include clean modular functions, type hints, docstrings, error handling, and an if __name__ == '__main__': block. "
+                    f"Write a complete, high-quality, production-grade {lang} script for: '{topic or 'core utility demonstration'}'. "
                     f"Output ONLY the complete source code inside ```{lang} ... ``` code fences."
                 )
             try:
@@ -1057,7 +1069,8 @@ class MainAgent:
             language=lang,
             run_after=not has_errors_req
         )
-        msg = f"I opened VS Code and created `{res.get('filename')}` at `{res.get('path')}`."
+        target_ide_label = "MATLAB" if (is_matlab or str(res.get("filename", "")).endswith(".m")) else "VS Code"
+        msg = f"I opened {target_ide_label} and created `{res.get('filename')}` at `{res.get('path')}`."
         if has_errors_req:
             msg += " It contains sample errors for you to inspect. Would you like me to analyze and diagnose the errors for you?"
         else:
@@ -1283,8 +1296,11 @@ class MainAgent:
                 log.warning("offline intent run failed: %s", e)
 
         # 1b. Offline code generation fallback
-        if any(k in low for k in ("write", "create", "make", "generate", "code", "type")) and any(k in low for k in ("python", "code", "matlab", "script", "program", "fibonacci", "prime", "math", "calculator", "game")):
-            lang = "matlab" if "matlab" in low else "python"
+        if any(k in low for k in ("write", "create", "make", "generate", "code", "type")) and any(k in low for k in ("python", "code", "matlab", "script", "program", "fibonacci", "prime", "math", "calculator", "game", "thumb", "thumbnail")):
+            is_matlab = ("matlab" in low) or ("thumb" in low and "python" not in low) or (
+                any(neg in low for neg in ("not in vs", "without vs", "instead of vs", "no vs code", "do not go to vs", "don't go to vs", "dont go to vs"))
+            )
+            lang = "matlab" if is_matlab else "python"
             topic = re.sub(r"^(?:(?:can you |could you |please |would you )*(?:open (?:vs code|vscode|the editor) (?:and |to )?)?)*(?:write|create|make|generate|type|code)(?: (?:a|an|some))?(?: (?:basic|sample|new))?(?: (?:python|matlab|c\+\+|c))?\s*(?:script|code|program|file)?(?: (?:in|into|for) (?:vs code|vscode))?(?: (?:about|for|to|like) )?", "", raw, flags=re.I).strip()
             return await self._create_and_open_script_intent(lang, topic)
 

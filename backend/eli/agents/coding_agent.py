@@ -306,13 +306,27 @@ class CodingAgent:
                 ides["vscode"] = which_code.stdout.splitlines()[0].strip()
 
         matlab_roots = [
+            Path(r"E:\Matlab911Win"),
             Path(prog_files) / "MATLAB",
             Path(prog_files_86) / "MATLAB",
             Path(r"E:\MATLAB"),
             Path(r"C:\MATLAB"),
         ]
+        # Also check all E:\Matlab* and C:\Matlab* drive roots
+        for drive in ("E:\\", "C:\\", "D:\\"):
+            try:
+                for d in Path(drive).glob("Matlab*"):
+                    if d.is_dir() and d not in matlab_roots:
+                        matlab_roots.append(d)
+            except Exception:
+                pass
+
         for mroot in matlab_roots:
             if mroot.is_dir():
+                direct_exe = mroot / "bin" / "matlab.exe"
+                if direct_exe.is_file():
+                    ides["matlab"] = str(direct_exe)
+                    break
                 for version_dir in sorted(mroot.glob("R20*"), reverse=True):
                     exe = version_dir / "bin" / "matlab.exe"
                     if exe.is_file():
@@ -369,8 +383,10 @@ class CodingAgent:
                     p = Path(target_path)
                     folder = p if p.is_dir() else p.parent
                     cmd += ["-sd", str(folder)]
+                    if p.is_file():
+                        cmd += ["-r", f"edit('{p.name}');"]
                 subprocess.Popen(cmd, **quiet)
-                return f"Launched {ide_label}" + (f" with working folder '{target_path}'." if target_path else ".")
+                return f"Launched {ide_label}" + (f" and opened script '{target_path}' in editor." if target_path else ".")
         except Exception as e:
             return f"Failed to launch {ide_label}: {e}"
         return f"Launched {ide_label}."
@@ -381,6 +397,29 @@ class CodingAgent:
         low = (goal or "").lower().strip()
 
         if "matlab" in target_lang or target_lang == "m":
+            if any(k in low for k in ("thumb", "thumbnail", "image", "picture")):
+                filename = "generate_thumbnail.m"
+                code = (
+                    "%% MATLAB Script: Generate Thumbnail Image\n"
+                    "% Creates a thumbnail image matrix, draws badge pattern, and displays it\n"
+                    "clear; clc; close all;\n\n"
+                    "% 1. Create a 128x128 color thumbnail canvas (gradient background)\n"
+                    "[X, Y] = meshgrid(linspace(-1, 1, 128), linspace(-1, 1, 128));\n"
+                    "R = exp(-(X.^2 + Y.^2)*1.5);\n"
+                    "thumb = cat(3, uint8(255*R*0.2), uint8(255*R*0.6), uint8(255*R*0.9));\n\n"
+                    "% 2. Draw thumbnail badge pattern\n"
+                    "mask = (X.^2 + Y.^2) < 0.35;\n"
+                    "thumb(repmat(mask, [1 1 3])) = 240;\n\n"
+                    "% 3. Display thumbnail\n"
+                    "figure('Name', 'Thumbnail Generator', 'NumberTitle', 'off');\n"
+                    "imshow(thumb);\n"
+                    "title('Generated Thumbnail Image');\n\n"
+                    "% 4. Save to current MATLAB folder\n"
+                    "imwrite(thumb, 'thumbnail.png');\n"
+                    "fprintf('Thumbnail successfully generated and saved to thumbnail.png\\n');\n"
+                )
+                return filename, code
+
             filename = "simulation.m"
             ylabel = "Amplitude"
             sim_title = goal or "Composite Waveform"
@@ -626,30 +665,40 @@ class CodingAgent:
 
     def create_code_script(self, filename: str, code: str, language: str = "python",
                            folder: str = "", run_after: bool = True) -> dict:
-        """Creates a verified script file on disk, validates AST syntax offline,
-        test-runs it to verify execution, and opens it directly in VS Code."""
+        """Creates a verified script file on disk, validates syntax offline,
+        test-runs if applicable, and opens it directly in the appropriate IDE (MATLAB or VS Code)."""
         name = Path(filename.strip()).name
         lang = language.lower().strip()
+
+        # Deduce language from extension if explicitly provided
+        if name.lower().endswith(".m"):
+            lang = "matlab"
+        elif name.lower().endswith(".py"):
+            lang = "python"
+
         if lang == "python" and not name.lower().endswith(".py"):
             name += ".py"
         elif lang == "matlab" and not name.lower().endswith(".m"):
             name += ".m"
         elif lang == "javascript" and not name.lower().endswith((".js", ".mjs")):
-            name += ".py" if "python" in code.lower() else ".js"
+            name += ".js"
 
         # Sanitize filename
         name = re.sub(r'[\\/:*?"<>|]', '_', name).strip()
         if not name or name in (".py", ".m", ".js"):
-            name = "script.py"
+            name = "script.m" if lang == "matlab" else "script.py"
 
-        # Resolve destination folder
+        # Resolve destination folder (MATLAB goes to Documents/MATLAB)
         dest_dir = None
         if folder:
             p = Path(folder).expanduser()
             if p.is_dir():
                 dest_dir = p
         if not dest_dir:
-            dest_dir = Path.home() / "Documents" / "PythonScripts"
+            if lang == "matlab":
+                dest_dir = Path.home() / "Documents" / "MATLAB"
+            else:
+                dest_dir = Path.home() / "Documents" / "PythonScripts"
         dest_dir.mkdir(parents=True, exist_ok=True)
         target_path = dest_dir / name
 
@@ -672,12 +721,16 @@ class CodingAgent:
                     syntax_err = ""
                 except Exception:
                     pass
+        elif name.endswith(".m"):
+            chk = self._check_matlab(target_path, code)
+            if not chk.get("valid"):
+                syntax_err = "; ".join(chk.get("errors", []))
 
         # Write file directly to disk
         target_path.write_text(code, encoding="utf-8")
         log.info("Saved code script to %s (%d bytes)", target_path, len(code))
 
-        # Test execution
+        # Test execution for Python
         exec_out = ""
         exec_ok = True
         if run_after and name.endswith(".py"):
@@ -693,14 +746,18 @@ class CodingAgent:
                     exec_out = f"Runtime exit code {r.returncode}:\n{err}"
             except Exception as ex:
                 exec_out = f"Test run skipped: {ex}"
+        elif name.endswith(".m"):
+            exec_out = "MATLAB script ready."
 
-        # Open directly in VS Code
-        ide_res = self.open_ide("vscode", str(target_path))
+        # Open in target IDE: MATLAB for .m files, VS Code for others
+        target_ide = "matlab" if lang == "matlab" else "vscode"
+        ide_res = self.open_ide(target_ide, str(target_path))
 
         return {
             "ok": True,
             "path": str(target_path),
             "filename": name,
+            "language": lang,
             "lines": len(code.splitlines()),
             "syntax_valid": not syntax_err,
             "syntax_note": syntax_err or "Syntax clean",

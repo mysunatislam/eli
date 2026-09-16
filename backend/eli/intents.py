@@ -167,8 +167,39 @@ def extract_persona_switch(text: str) -> Optional[tuple[str, list[str]]]:
     return None
 
 
+def extract_matlab_code_request(text: str) -> Optional[tuple[str, list[str]]]:
+    t = text.lower().strip().strip(".!?,")
+    has_matlab = any(k in t for k in ("matlab", ".m file", ".m script", "in matlab", "use matlab", "matlab app", "into matlab"))
+    has_code_action = any(k in t for k in (
+        "write a code", "write code", "writing a code", "writing code",
+        "create code", "start writing", "code in there", "start coding",
+        "make a code", "write a", "writing a", "open a new script", "open new script",
+        "new script", "generate a", "generate code", "method code", "thumbnail"
+    ))
+    if not (has_matlab and (has_code_action or "start" in t or "script" in t or "thumb" in t)):
+        return None
+
+    # Clean topic
+    topic = re.sub(r"^(?:(?:can you |could you |please |would you )*(?:go to matlab|use matlab|in matlab|open a new script and |open new script and |open matlab and )*(?:write|create|make|generate|start writing|type|code)(?: (?:a|an|some|new|basic))?\s*(?:matlab\s*)?(?:script|code|program|file|method code)?\s*(?:that will|to|about|for)?\s*)", "", t, flags=re.I).strip()
+    topic = topic or "basic MATLAB script"
+    return "write_code_matlab", [topic, "matlab"]
+
+
 def extract_vscode_code_request(text: str) -> Optional[tuple[str, list[str]]]:
     t = text.lower().strip().strip(".!?,")
+    # Negative directives: "do not go to vs code", "don't open vs code", "not in vs code", "without vs code", "instead of vs code"
+    if any(neg in t for neg in (
+        "do not go to vs", "don't go to vs", "dont go to vs",
+        "do not open vs", "don't open vs", "dont open vs",
+        "not in vs", "without vs", "instead of vs",
+        "no vs code", "not vs code", "do not use vs", "don't use vs", "dont use vs"
+    )):
+        return None
+
+    # If MATLAB is requested, do not route to VS Code
+    if any(k in t for k in ("matlab", "use matlab", "in the matlab", "in matlab")):
+        return None
+
     has_vscode = any(k in t for k in ("vs code", "vscode", "visual studio code", "js code", "the editor", "code in my laptop"))
     has_code_action = any(k in t for k in (
         "write a code", "write code", "writing a code", "writing code",
@@ -482,6 +513,11 @@ def match(text: str):
             return "youtube_ask_song", []
         elif yt_req.get("query"):
             return "youtube", [yt_req["query"]]
+
+    # 5a. Dedicated MATLAB code creation request
+    matlab_req = extract_matlab_code_request(t)
+    if matlab_req:
+        return matlab_req
 
     # 5b. Dedicated VS Code code creation request (strictly prioritized before browser search)
     vscode_req = extract_vscode_code_request(t)

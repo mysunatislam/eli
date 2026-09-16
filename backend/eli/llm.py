@@ -455,6 +455,8 @@ class OfflineLocalProvider:
     """100% free, offline, local engine that requires no external API keys or network connection."""
     name = "offline"
     model = "eli-offline-engine"
+    available = True
+    is_offline = True
 
     async def complete(self, system: tuple[str, str], turns: list[dict], tools: list[dict], on_text: OnText = None) -> LLMResponse:
         # Loop Breaker: If the last turn contains tool_result, a tool was just executed!
@@ -463,10 +465,15 @@ class OfflineLocalProvider:
         has_tool_result = any(p.get("type") == "tool_result" for p in last_turn.get("parts", []))
         if has_tool_result:
             res_parts = [p.get("content", "") for p in last_turn.get("parts", []) if p.get("type") == "tool_result"]
-            summary = " ".join(str(rp) for rp in res_parts if rp).strip()
-            summary = re.sub(r"\[Verification:[^\]]*\]", "", summary).strip()
-            summary = re.sub(r"\[Diagnosis:[^\]]*\]", "", summary).strip()
-            reply = summary[:300] if summary else "Action completed."
+            raw_summary = " ".join(str(rp) for rp in res_parts if rp).strip()
+            if "[Verification: FAILED]" in raw_summary:
+                diag_match = re.search(r"\[Verification: FAILED\]\s*([^\n]+)", raw_summary)
+                fail_reason = diag_match.group(1).strip() if diag_match else "Action verification failed."
+                reply = f"I attempted the action, but verification failed: {fail_reason}"
+            else:
+                summary = re.sub(r"\[Verification:[^\]]*\]", "", raw_summary).strip()
+                summary = re.sub(r"\[Diagnosis:[^\]]*\]", "", summary).strip()
+                reply = summary[:300] if summary else "Action completed."
             if on_text:
                 on_text(reply)
             return LLMResponse(text=reply, tool_calls=[], stop="end")
@@ -484,6 +491,15 @@ class OfflineLocalProvider:
         low = last_user.lower().strip()
         tools_dict = {t["name"]: t for t in tools}
 
+        is_neg_vscode = (
+            any(neg in low for neg in (
+                "do not go to vs", "don't go to vs", "dont go to vs",
+                "no vs code", "not in vs", "not vs code", "without vs code",
+                "instead of vs code", "do not open vs", "don't open vs", "dont open vs"
+            ))
+            or any(m in low for m in ("matlab", "use matlab", "in matlab", "into matlab"))
+        )
+
         # 0. Close App / Window / Tab (takes priority over search so 'close Google Chrome' never searches!)
         if any(k in low for k in ("close", "shut down", "kill", "exit", "quit")):
             if "close_app_or_window" in tools_dict:
@@ -494,16 +510,18 @@ class OfflineLocalProvider:
                 return LLMResponse(text=reply, tool_calls=[call], stop="tool")
 
         # 1. Coding task -> create_code_script tool
-        if any(k in low for k in ("write", "create", "make", "generate", "code", "script", "program")) and any(k in low for k in ("python", "code", "matlab", "script", "program", "fibonacci", "prime", "math", "calculator", "game")):
+        if any(k in low for k in ("write", "create", "make", "generate", "code", "script", "program")) and any(k in low for k in ("python", "code", "matlab", "script", "program", "fibonacci", "prime", "math", "calculator", "game", "thumb", "thumbnail")):
             if "create_code_script" in tools_dict:
-                lang = "matlab" if "matlab" in low else "python"
+                lang = "matlab" if (("matlab" in low) or (is_neg_vscode and "python" not in low) or ("thumb" in low and "python" not in low)) else "python"
                 topic = re.sub(r"^(?:(?:can you |could you |please )*(?:open (?:vs code|vscode|the editor) (?:and |to )?)?)*(?:write|create|make|generate|type|code)(?: (?:a|an|some))?(?: (?:basic|sample|new))?(?: (?:python|matlab|c\+\+|c))?\s*(?:script|code|program|file)?(?: (?:in|into|for) (?:vs code|vscode))?(?: (?:about|for|to|like) )?", "", last_user, flags=re.I).strip()
-                fname = f"{re.sub(r'[^a-zA-Z0-9_]', '_', topic.lower()[:25]).strip('_') or 'offline_script'}.py"
+                clean_t = re.sub(r'[^a-zA-Z0-9_]', '_', topic.lower()[:25]).strip('_') or ('matlab_script' if lang == 'matlab' else 'offline_script')
+                ext = ".m" if lang == "matlab" else ".py"
+                fname = f"{clean_t}{ext}" if not clean_t.endswith(ext) else clean_t
                 call = ToolCall(f"call_{secrets.token_hex(4)}", "create_code_script", {
                     "filename": fname,
                     "code": "",
                     "language": lang,
-                    "run_after": True
+                    "run_after": (lang == "python")
                 })
                 reply_text = f"Generating and verifying {lang.title()} code for '{topic or 'task'}' in offline mode..."
                 if on_text:
@@ -511,7 +529,7 @@ class OfflineLocalProvider:
                 return LLMResponse(text=reply_text, tool_calls=[call], stop="tool")
 
         # 2. Syntax / Error check -> inspect_and_diagnose_vscode or scan_project_errors
-        if any(k in low for k in ("vs code", "vscode", "in here", "the code i have written", "code i wrote", "editor")) and any(k in low for k in ("check", "inspect", "analyse", "analyze", "see", "error", "errors", "look")):
+        if not is_neg_vscode and any(k in low for k in ("vs code", "vscode", "in here", "the code i have written", "code i wrote", "editor")) and any(k in low for k in ("check", "inspect", "analyse", "analyze", "see", "error", "errors", "look")):
             if "inspect_and_diagnose_vscode" in tools_dict:
                 call = ToolCall(f"call_{secrets.token_hex(4)}", "inspect_and_diagnose_vscode", {})
                 return LLMResponse(text="Opening VS Code and inspecting your code...", tool_calls=[call], stop="tool")
@@ -522,7 +540,7 @@ class OfflineLocalProvider:
                 return LLMResponse(text="Scanning project files for syntax errors offline...", tool_calls=[call], stop="tool")
 
         # 3. Open IDE / App -> open_ide / open_app or create_code_script
-        if any(k in low for k in ("vs code", "vscode", "js code", "the editor", "in my laptop")) and any(k in low for k in ("write", "writing", "create", "start writing", "code", "refresh")):
+        if not is_neg_vscode and any(k in low for k in ("vs code", "vscode", "js code", "the editor", "in my laptop")) and any(k in low for k in ("write", "writing", "create", "start writing", "code", "refresh")):
             if "create_code_script" in tools_dict:
                 fname = "refresh_me.py" if any(k in low for k in ("refresh", "relax", "calm")) else "script.py"
                 call = ToolCall(f"call_{secrets.token_hex(4)}", "create_code_script", {"filename": fname, "code": "", "language": "python"})
@@ -530,14 +548,14 @@ class OfflineLocalProvider:
                 if on_text: on_text(msg)
                 return LLMResponse(text=msg, tool_calls=[call], stop="tool")
 
-        if any(k in low for k in ("open vs code", "open vscode", "launch vs code", "search for vs code", "search vs code")):
+        if not is_neg_vscode and any(k in low for k in ("open vs code", "open vscode", "launch vs code", "search for vs code", "search vs code")):
             if "open_ide" in tools_dict:
                 call = ToolCall(f"call_{secrets.token_hex(4)}", "open_ide", {"ide": "vscode"})
                 return LLMResponse(text="Opening Visual Studio Code...", tool_calls=[call], stop="tool")
-        if any(k in low for k in ("open matlab", "launch matlab")):
+        if any(k in low for k in ("open matlab", "launch matlab", "open the matlab", "start matlab", "matlab app")) or ("matlab" in low and any(k in low for k in ("check", "installed", "is there", "available", "exist"))):
             if "open_ide" in tools_dict:
                 call = ToolCall(f"call_{secrets.token_hex(4)}", "open_ide", {"ide": "matlab"})
-                return LLMResponse(text="Opening MATLAB...", tool_calls=[call], stop="tool")
+                return LLMResponse(text="Checking MATLAB and opening application...", tool_calls=[call], stop="tool")
 
         # 4. Web & Social Media Navigation -> open_url / web_search
         if any(k in low for k in ("facebook", "messenger", "fb", "youtube", "browse")):
