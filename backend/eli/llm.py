@@ -230,24 +230,24 @@ class GeminiProvider:
                 out.append(T.Content(role="user" if t["role"] == "user" else "model", parts=parts))
         return out
 
-    FALLBACK_MODELS = ("gemini-3.5-flash-lite", "gemini-3.6-flash", "gemini-3.1-flash-lite")
+    FALLBACK_MODELS = ("gemini-3.5-flash-lite", "gemini-2.0-flash", "gemini-1.5-flash", "gemini-3.6-flash")
 
     async def complete(self, system: tuple[str, str], turns: list[dict], tools: list[dict], on_text: OnText = None) -> LLMResponse:
         try:
             return await self._complete(system, turns, tools, on_text)
         except Exception as e:
             s = str(e).lower()
-            if any(k in s for k in ("not_found", "no longer available", "not found", "503")):
+            if any(k in s for k in ("not_found", "no longer available", "not found", "503", "429", "quota", "resource_exhausted", "too many requests")):
                 for alt in self.FALLBACK_MODELS:
                     if alt == self.model:
                         continue
-                    log.warning("model %s unavailable (%s); trying fallback model %s", self.model, str(e)[:120], alt)
+                    log.warning("model %s rate-limited or unavailable (%s); trying fallback model %s", self.model, str(e)[:120], alt)
                     self.model = alt
                     try:
                         return await self._complete(system, turns, tools, on_text)
                     except Exception as e2:
                         s2 = str(e2).lower()
-                        if any(k in s2 for k in ("not_found", "no longer available", "not found", "503")):
+                        if any(k in s2 for k in ("not_found", "no longer available", "not found", "503", "429", "quota", "resource_exhausted", "too many requests")):
                             continue
                         raise
             raise
@@ -571,45 +571,108 @@ class OfflineLocalProvider:
                 call = ToolCall(f"call_{secrets.token_hex(4)}", "query_rag", {"query": last_user})
                 return LLMResponse(text="Recalling from local encrypted memory...", tool_calls=[call], stop="tool")
 
-        # 7. Check if system prompt already contains RAG knowledge relevant to this query
         stable, dynamic = system
-        if "[RAG MEMORY" in dynamic or "Local Document" in dynamic or "Past Verified Solutions" in dynamic:
-            # Extract knowledge sections from dynamic prompt
+
+        # Extract active persona metadata from stable prompt
+        persona_name = "Eli"
+        persona_role = "personal companion"
+        if "Atlas" in stable:
+            persona_name = "Atlas"
+            persona_role = "software & tech agency partner"
+        elif "Aria" in stable:
+            persona_name = "Aria"
+            persona_role = "hotel & hospitality concierge"
+        elif "Zephyr" in stable:
+            persona_name = "Zephyr"
+            persona_role = "event producer & project coordinator"
+        elif "Mentor" in stable:
+            persona_name = "Mentor"
+            persona_role = "procedural software instructor & guide"
+
+        # 7. Check if user is EXPLICITLY asking for memory/preferences/name/recollections
+        is_asking_memory = any(k in low for k in (
+            "what do you remember", "what is my name", "do you know my name",
+            "what do you know about me", "my preferences", "recall", "what's in your memory",
+            "show me your memory", "who am i"
+        ))
+        if is_asking_memory:
             extracted = []
             for line in dynamic.splitlines():
-                if any(tag in line for tag in ("From '", "Solution for", "Preferences:", "Project:")):
+                if any(b in line for b in ("/9j/", "data:image", "media_type", "{'type': 'image'")):
+                    continue
+                if any(tag in line for tag in ("Preferences:", "Project:", "From '", "Solution for:")):
                     extracted.append(line.strip())
                 elif extracted and line.strip().startswith("-"):
                     extracted.append(line.strip())
             if extracted:
                 rag_summary = "\n".join(extracted[:6])
-                reply = f"Based on your local knowledge base and memory:\n{rag_summary}"
+                reply = f"Here is what I remember about you from local memory:\n{rag_summary}"
                 if on_text:
                     on_text(reply)
                 return LLMResponse(text=reply, tool_calls=[], stop="end")
 
-        # 8. Conversational & Informational Reply
-        if any(w in low for w in ("hello", "hi", "hey", "who are you", "what can you do", "help")):
-            reply = (
-                "Hello! I'm Ellie, your autonomous desktop AI companion. "
-                "I have a full local RAG and knowledge pipeline, and can create and test scripts in VS Code or MATLAB, "
-                "verify syntax, control YouTube/media, search Facebook/web, and autonomously manage your desktop."
-            )
+        # 8. Conversational & Persona-Aware Responses
+        if any(w in low for w in ("hello", "hi", "hey", "who are you", "what can you do", "help", "introduce yourself")):
+            if persona_name == "Atlas":
+                reply = (
+                    "Hello! I am Atlas, your software engineering and tech agency partner. "
+                    "I specialize in code architecture, debugging, git hygiene, terminal automation, "
+                    "and delivering client software projects with precision. How can I help with your codebase today?"
+                )
+            elif persona_name == "Aria":
+                reply = (
+                    "Hello! I am Aria, your executive hospitality and hotel management concierge. "
+                    "I assist with front-desk operations, guest communications, reservation management, "
+                    "and VIP coordination. How may I support your property operations today?"
+                )
+            elif persona_name == "Zephyr":
+                reply = (
+                    "Hey! I am Zephyr, your dynamic event producer and project coordinator. "
+                    "I organize run-of-show schedules, vendor timelines, venue logistics, and budget tracking "
+                    "to keep complex live events executing on time. What milestone are we tackling?"
+                )
+            elif persona_name == "Mentor":
+                reply = (
+                    "Hello! I am Mentor, your procedural software instructor and guide. "
+                    "I can guide you step-by-step through any desktop application (CAD, 3D suites, code editors), "
+                    "or record your screen to author new procedural guides. What would you like to learn or teach?"
+                )
+            else:
+                reply = (
+                    "Hello! I am Eli, your personal companion. "
+                    "I'm here on your desktop to help with daily tasks, code, research, media, and focus. "
+                    "What would you like to work on?"
+                )
         elif any(w in low for w in ("how", "what", "why", "who", "where", "explain", "tell me")):
-            if "web_search" in tools_dict:
+            if "web_search" in tools_dict and len(low.split()) <= 10 and not any(k in low for k in ("you", "your name")):
                 clean_q = re.sub(r"^(?:(?:can you |could you |please )*(?:search|google|look up|tell me about|tell me|explain|what is|what are|how to|who is)\s*)", "", last_user, flags=re.I).strip()
                 clean_q = clean_q or last_user
                 call = ToolCall(f"call_{secrets.token_hex(4)}", "web_search", {"query": clean_q, "engine": "google"})
                 msg = f"Searching Google for '{clean_q}'..."
                 if on_text: on_text(msg)
                 return LLMResponse(text=msg, tool_calls=[call], stop="tool")
-            reply = (
-                f"I've noted your question about '{last_user[:60]}'. "
-                "I am running with your local knowledge base and tools active. "
-                "I can index documents into our RAG pipeline, write and execute code, and operate your desktop tools directly."
-            )
+            
+            if persona_name == "Atlas":
+                reply = f"Atlas on task: regarding '{last_user[:60]}', I can inspect the relevant code, run diagnostic tests, or search technical docs for you."
+            elif persona_name == "Aria":
+                reply = f"Aria here: regarding '{last_user[:60]}', I can coordinate the guest records, draft communications, or check operational status."
+            elif persona_name == "Zephyr":
+                reply = f"Zephyr on it: regarding '{last_user[:60]}', I can structure the timeline, review vendor contacts, or align our run-of-show schedule."
+            elif persona_name == "Mentor":
+                reply = f"Mentor ready: regarding '{last_user[:60]}', let's break this down step-by-step or start an interactive on-screen guide."
+            else:
+                reply = f"I've noted your question about '{last_user[:60]}'. I'm ready to assist with desktop control, code, and local research."
         else:
-            reply = f"Understood: '{last_user}'. Executing on your desktop with local RAG memory and tool orchestration."
+            if persona_name == "Atlas":
+                reply = f"Atlas acknowledged: '{last_user}'. Moving forward with technical execution."
+            elif persona_name == "Aria":
+                reply = f"Aria acknowledged: '{last_user}'. Assisting with your hospitality request."
+            elif persona_name == "Zephyr":
+                reply = f"Zephyr on it: '{last_user}'. Coordinating event milestones."
+            elif persona_name == "Mentor":
+                reply = f"Mentor ready: '{last_user}'. Preparing procedural instructions."
+            else:
+                reply = f"Understood: '{last_user}'. Working on your desktop."
 
         if on_text:
             on_text(reply)

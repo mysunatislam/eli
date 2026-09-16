@@ -443,7 +443,12 @@ class AgenticOrchestrator:
 
     def record_successful_resolution(self, goal: str, summary: str, tools: list[str]) -> None:
         """Consolidates verified actions into persistent long-term memory."""
-        content = f"Solved '{goal}': {summary}. Tools: {', '.join(tools)}."
+        s = str(summary or "")
+        if any(b in s for b in ("/9j/", "data:image", "media_type", "{'type': 'image'")):
+            return
+        if len(s) > 200:
+            s = s[:197] + "..."
+        content = f"Solved '{goal}': {s}. Tools: {', '.join(tools)}."
         try:
             self.memory.remember(content, kind="solution", importance=0.8)
             log.info("Consolidated verified solution into memory: %s", content[:80])
