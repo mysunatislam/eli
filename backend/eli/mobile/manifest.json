@@ -1,0 +1,9 @@
+{
+  "name": "Eli Companion",
+  "short_name": "Eli",
+  "start_url": "/mobile",
+  "display": "standalone",
+  "background_color": "#141824",
+  "theme_color": "#141824",
+  "icons": [{ "src": "/mobile/icon.png", "sizes": "192x192", "type": "image/png" }]
+}

@@ -1,0 +1,17 @@
+backend/.venv/
+backend/data/
+backend/.env
+backend/__pycache__/
+**/__pycache__/
+desktop/node_modules/
+desktop/dist/
+desktop/build-resources/
+installer/build.log
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+*.log
+*.FCStd1
+tests/assets/five_holes.FCStd
+tests/assets/freecad-test-config/

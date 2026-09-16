@@ -1,0 +1,22 @@
+name: ci
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install test deps (pure-Python suites only)
+        run: pip install pytest pytest-asyncio pillow
+      - name: Syntax check
+        run: python -m compileall -q backend/eli
+      - name: Teach-me / guide engine tests
+        run: cd backend && python -m pytest tests/test_teach.py -q

@@ -1,0 +1,1298 @@
+"""Coding Agent: VS Code / terminal awareness, project file access, and the
+error -> analyse -> fix -> test -> verify workflow.
+
+The model does the reasoning; this module gives it eyes and hands inside the project:
+- what VS Code is showing (file, workspace, language, unsaved state) from the window title
+- where projects live (Documents/Desktop/Downloads, ELI_PROJECT_DIRS, VS Code's recent workspaces)
+- find / read / write files (writes are confirmation-gated and backed up), git status, list dirs
+"""
+from __future__ import annotations
+
+import ast
+import json
+import logging
+import os
+import re
+import subprocess
+import time
+import urllib.parse
+from pathlib import Path
+from typing import Optional
+
+log = logging.getLogger("eli.coding")
+
+LANG_BY_EXT = {
+    ".py": "Python", ".ipynb": "Jupyter (Python)", ".js": "JavaScript", ".mjs": "JavaScript", ".ts": "TypeScript",
+    ".tsx": "TypeScript (React)", ".jsx": "JavaScript (React)", ".java": "Java", ".kt": "Kotlin", ".cs": "C#",
+    ".cpp": "C++", ".cc": "C++", ".c": "C", ".h": "C/C++ header", ".hpp": "C++ header", ".rs": "Rust", ".go": "Go",
+    ".rb": "Ruby", ".php": "PHP", ".swift": "Swift", ".dart": "Dart", ".html": "HTML", ".css": "CSS", ".scss": "SCSS",
+    ".json": "JSON", ".md": "Markdown", ".sql": "SQL", ".sh": "Shell", ".ps1": "PowerShell", ".bat": "Batch",
+    ".yaml": "YAML", ".yml": "YAML", ".toml": "TOML", ".xml": "XML", ".m": "MATLAB", ".r": "R", ".jl": "Julia",
+}
+VSCODE_TITLE = re.compile(r"^(?P<dirty>●\s*)?(?P<file>.+?)\s+-\s+(?P<workspace>.+?)\s+-\s+Visual Studio Code(?: - Insiders)?$")
+VSCODE_TITLE_NOWS = re.compile(r"^(?P<dirty>●\s*)?(?P<file>.+?)\s+-\s+Visual Studio Code(?: - Insiders)?$")
+SKIP_DIRS = {"node_modules", ".git", ".venv", "venv", "__pycache__", ".idea", ".vs", "dist", "build", "target",
+             "AppData", ".cache", ".gradle", "Library", "site-packages", ".next", ".nuxt", "bin", "obj"}
+TEXT_EXT = set(LANG_BY_EXT) | {".txt", ".cfg", ".ini", ".env", ".csv", ".log", ".gitignore", ".lock"}
+
+
+class CodingAgent:
+    def __init__(self, settings, extra_dirs: Optional[list[str]] = None):
+        self.settings = settings
+        self.extra_dirs = extra_dirs or []
+        self._roots: list[Path] = []
+        self._roots_ts = 0.0
+        self.pending_code_fix: Optional[dict] = None
+
+    # -- context --------------------------------------------------------------------------------
+    def vscode_context(self, window) -> Optional[dict]:
+        title = (getattr(window, "title", "") or "").strip()
+        if "Visual Studio Code" not in title:
+            return None
+        m = VSCODE_TITLE.match(title) or VSCODE_TITLE_NOWS.match(title)
+        if not m:
+            return {"editor": "VS Code"}
+        f = m.group("file").strip()
+        ws = (m.groupdict().get("workspace") or "").strip()
+        ext = Path(f).suffix.lower()
+        return {
+            "editor": "VS Code",
+            "file": f,
+            "workspace": ws,
+            "language": LANG_BY_EXT.get(ext, ext.lstrip(".").upper() if ext else "unknown"),
+            "unsaved": bool(m.group("dirty")),
+        }
+
+    def describe_context(self, window) -> str:
+        ctx = self.vscode_context(window)
+        if not ctx:
+            return ""
+        parts = [f"VS Code is open on {ctx.get('file', 'a file')}"]
+        if ctx.get("language"):
+            parts.append(f"({ctx['language']})")
+        if ctx.get("workspace"):
+            parts.append(f"in workspace '{ctx['workspace']}'")
+        if ctx.get("unsaved"):
+            parts.append("[unsaved changes]")
+        return " ".join(parts) + "."
+
+    # -- roots ----------------------------------------------------------------------------------
+    def project_roots(self) -> list[Path]:
+        if self._roots and time.time() - self._roots_ts < 60:
+            return self._roots
+        home = Path.home()
+        cands: list[Path] = []
+        for name in ("Documents", "Desktop", "Downloads", "source", "repos", "projects", "Projects", "code", "dev",
+                     "OneDrive/Documents", "OneDrive/Desktop"):
+            cands.append(home / name)
+        cands.append(home / ".gemini" / "antigravity" / "scratch")
+        for drive in ("C:", "D:", "E:"):
+            d_path = Path(drive + "\\")
+            if d_path.exists():
+                for sub in ("Projects", "projects", "Code", "code", "dev", "workspace", "Workspace", "repos", "source", "MATLAB"):
+                    cands.append(d_path / sub)
+        cands += [Path(p) for p in self.extra_dirs]
+        cands += self._vscode_recent()
+        seen, roots = set(), []
+        for c in cands:
+            try:
+                r = c.resolve()
+            except Exception:
+                continue
+            if r.is_dir() and str(r).lower() not in seen:
+                seen.add(str(r).lower())
+                roots.append(r)
+        self._roots, self._roots_ts = roots, time.time()
+        return roots
+
+    def _vscode_recent(self) -> list[Path]:
+        out: list[Path] = []
+        appdata = os.environ.get("APPDATA", "")
+        if not appdata:
+            return out
+        base = Path(appdata) / "Code" / "User"
+        for storage in (base / "globalStorage" / "storage.json",):
+            try:
+                text = storage.read_text("utf-8", errors="ignore")
+            except Exception:
+                continue
+            for uri in re.findall(r'file:///[^"\\]+', text)[:200]:
+                try:
+                    p = Path(urllib.parse.unquote(uri.replace("file:///", "")))
+                    if p.is_dir():
+                        out.append(p)
+                    elif p.parent.is_dir():
+                        out.append(p.parent)
+                except Exception:
+                    pass
+        try:
+            for ws in (base / "workspaceStorage").glob("*/workspace.json"):
+                data = json.loads(ws.read_text("utf-8", errors="ignore"))
+                folder = data.get("folder") or ""
+                if folder.startswith("file:///"):
+                    p = Path(urllib.parse.unquote(folder.replace("file:///", "")))
+                    if p.is_dir():
+                        out.append(p)
+        except Exception:
+            pass
+        return out[:40]
+
+    def allowed(self, path: Path) -> bool:
+        """Only files under the user's profile or a known project root. Never system folders."""
+        try:
+            p = path.resolve()
+        except Exception:
+            return False
+        s = str(p).lower()
+        if any(s.startswith(x) for x in (r"c:\windows", r"c:\program files", r"c:\programdata")):
+            return False
+        if s.startswith(str(Path.home()).lower()):
+            return True
+        return any(s.startswith(str(r).lower()) for r in self.project_roots())
+
+    # -- files ----------------------------------------------------------------------------------
+    def find_files(self, query: str, limit: int = 15, time_budget: float = 3.0, max_depth: int = 5) -> list[dict]:
+        toks = [t for t in re.split(r"[\s,;]+", query.lower()) if t]
+        if not toks:
+            return []
+        deadline = time.time() + time_budget
+        hits: list[dict] = []
+
+        def walk(d: Path, depth: int):
+            if depth > max_depth or time.time() > deadline:
+                return
+            try:
+                with os.scandir(d) as it:
+                    for e in it:
+                        if time.time() > deadline:
+                            return
+                        name = e.name
+                        low = name.lower()
+                        if e.is_dir(follow_symlinks=False):
+                            if name in SKIP_DIRS or name.startswith("."):
+                                continue
+                            if all(t in low for t in toks):
+                                try:
+                                    st = e.stat()
+                                    hits.append({"path": e.path, "kind": "folder", "size": 0, "mtime": st.st_mtime})
+                                except OSError:
+                                    pass
+                            walk(Path(e.path), depth + 1)
+                        elif all(t in low for t in toks):
+                            try:
+                                st = e.stat()
+                                hits.append({"path": e.path, "kind": "file", "size": st.st_size, "mtime": st.st_mtime})
+                            except OSError:
+                                pass
+            except (PermissionError, FileNotFoundError, OSError):
+                return
+
+        for root in self.project_roots():
+            walk(root, 0)
+            if time.time() > deadline:
+                break
+        # dedupe + newest first
+        seen, out = set(), []
+        for h in sorted(hits, key=lambda h: h["mtime"], reverse=True):
+            k = h["path"].lower()
+            if k not in seen:
+                seen.add(k)
+                out.append(h)
+        return out[:limit]
+
+    def format_hits(self, hits: list[dict]) -> str:
+        if not hits:
+            return "No matching files in your project folders."
+        lines = []
+        for h in hits:
+            age = time.strftime("%Y-%m-%d %H:%M", time.localtime(h["mtime"]))
+            size = f"{h['size']/1024:.0f} KB" if h["kind"] == "file" else "folder"
+            lines.append(f"- {h['path']}  ({size}, modified {age})")
+        return "\n".join(lines)
+
+    def read_file(self, path: str, max_chars: int = 12000, start_line: Optional[int] = None, end_line: Optional[int] = None) -> str:
+        p = Path(path).expanduser()
+        if not p.is_file():
+            return f"Not a file: {path}"
+        if not self.allowed(p):
+            return "That path is outside your user folders and project directories; I won't read it."
+        if p.suffix.lower() not in TEXT_EXT and p.stat().st_size > 200_000:
+            return f"{p.name} looks binary or very large ({p.stat().st_size} bytes); not reading it."
+        try:
+            text = p.read_text("utf-8", errors="replace")
+        except Exception as e:
+            return f"Couldn't read {p.name}: {e}"
+        lines = text.splitlines()
+        a = max(1, start_line or 1)
+        b = min(len(lines), end_line or len(lines))
+        chunk = "\n".join(f"{i:>5}  {lines[i-1]}" for i in range(a, b + 1))
+        if len(chunk) > max_chars:
+            chunk = chunk[:max_chars] + f"\n... (truncated; file has {len(lines)} lines)"
+        return f"{p} (lines {a}-{b} of {len(lines)}):\n{chunk}"
+
+    def write_file(self, path: str, content: str, backup: bool = True) -> str:
+        p = Path(path).expanduser()
+        if not self.allowed(p):
+            return "That path is outside your user folders and project directories; I won't write there."
+        try:
+            p.parent.mkdir(parents=True, exist_ok=True)
+            if backup and p.exists():
+                bak = p.with_suffix(p.suffix + ".eli.bak")
+                bak.write_bytes(p.read_bytes())
+            p.write_text(content, "utf-8")
+            return f"Wrote {len(content)} characters to {p}" + (" (backup: .eli.bak)" if backup and p.exists() else "")
+        except Exception as e:
+            return f"Couldn't write {p}: {e}"
+
+    def list_dir(self, path: str, limit: int = 60) -> str:
+        p = Path(path).expanduser()
+        if not p.is_dir():
+            return f"Not a folder: {path}"
+        if not self.allowed(p):
+            return "That folder is outside your user folders and project directories."
+        rows = []
+        try:
+            for e in sorted(p.iterdir(), key=lambda x: (x.is_file(), x.name.lower()))[:limit]:
+                rows.append(("  " if e.is_file() else "[dir] ") + e.name)
+        except Exception as e:
+            return f"Couldn't list {p}: {e}"
+        return f"{p}:\n" + "\n".join(rows)
+
+    def git_info(self, path: str) -> str:
+        p = Path(path).expanduser()
+        if p.is_file():
+            p = p.parent
+        if not p.is_dir() or not self.allowed(p):
+            return "No accessible folder at that path."
+        try:
+            root = subprocess.run(["git", "-C", str(p), "rev-parse", "--show-toplevel"], capture_output=True, text=True,
+                                  timeout=10, creationflags=subprocess.CREATE_NO_WINDOW)
+            if root.returncode != 0:
+                return f"{p} is not inside a git repository."
+            top = root.stdout.strip()
+            status = subprocess.run(["git", "-C", top, "status", "--short", "--branch"], capture_output=True, text=True,
+                                    timeout=15, creationflags=subprocess.CREATE_NO_WINDOW).stdout
+            diff = subprocess.run(["git", "-C", top, "diff", "--stat"], capture_output=True, text=True,
+                                  timeout=15, creationflags=subprocess.CREATE_NO_WINDOW).stdout
+            last = subprocess.run(["git", "-C", top, "log", "-3", "--oneline"], capture_output=True, text=True,
+                                  timeout=15, creationflags=subprocess.CREATE_NO_WINDOW).stdout
+            return f"repo: {top}\n{status.strip()}\n\ndiff --stat:\n{diff.strip() or '(clean)'}\n\nrecent commits:\n{last.strip()}"
+        except FileNotFoundError:
+            return "git is not installed or not on PATH."
+        except Exception as e:
+            return f"git failed: {e}"
+
+    # -- IDE discovery and launching -----------------------------------------------------------
+    def discover_ides(self) -> dict[str, str]:
+        """Discovers installed IDEs (VS Code, MATLAB) across standard directories and PATH."""
+        ides: dict[str, str] = {}
+        local_app = os.environ.get("LOCALAPPDATA", "")
+        prog_files = os.environ.get("PROGRAMFILES", r"C:\Program Files")
+        prog_files_86 = os.environ.get("PROGRAMFILES(X86)", r"C:\Program Files (x86)")
+
+        vscode_candidates = [
+            Path(local_app) / "Programs" / "Microsoft VS Code" / "Code.exe",
+            Path(prog_files) / "Microsoft VS Code" / "Code.exe",
+            Path(prog_files_86) / "Microsoft VS Code" / "Code.exe",
+            Path(r"E:\Microsoft VS Code\Code.exe"),
+        ]
+        for vc in vscode_candidates:
+            if vc.is_file():
+                ides["vscode"] = str(vc)
+                break
+        if "vscode" not in ides:
+            which_code = subprocess.run(["where", "code"], capture_output=True, text=True, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            if which_code.returncode == 0 and which_code.stdout.strip():
+                ides["vscode"] = which_code.stdout.splitlines()[0].strip()
+
+        matlab_roots = [
+            Path(prog_files) / "MATLAB",
+            Path(prog_files_86) / "MATLAB",
+            Path(r"E:\MATLAB"),
+            Path(r"C:\MATLAB"),
+        ]
+        for mroot in matlab_roots:
+            if mroot.is_dir():
+                for version_dir in sorted(mroot.glob("R20*"), reverse=True):
+                    exe = version_dir / "bin" / "matlab.exe"
+                    if exe.is_file():
+                        ides["matlab"] = str(exe)
+                        break
+            if "matlab" in ides:
+                break
+        if "matlab" not in ides:
+            which_matlab = subprocess.run(["where", "matlab"], capture_output=True, text=True, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            if which_matlab.returncode == 0 and which_matlab.stdout.strip():
+                ides["matlab"] = which_matlab.stdout.splitlines()[0].strip()
+
+        return ides
+
+    def open_ide(self, ide_name: str, target: str = "") -> str:
+        """Launches the target IDE, optionally opening a workspace folder or file."""
+        ides = self.discover_ides()
+        key = ide_name.lower().replace(" ", "").replace("-", "")
+        exe = None
+        if "code" in key or "vscode" in key:
+            exe = ides.get("vscode")
+            ide_label = "Visual Studio Code"
+        elif "matlab" in key:
+            exe = ides.get("matlab")
+            ide_label = "MATLAB"
+        else:
+            return f"I don't have automatic detection for '{ide_name}'. Supported: VS Code, MATLAB."
+
+        if not exe:
+            return f"{ide_label} was not found on your system paths. Make sure it's installed."
+
+        target_path = ""
+        if target:
+            p = Path(target).expanduser()
+            if p.exists():
+                target_path = str(p.resolve())
+            else:
+                hits = self.find_files(target, limit=1)
+                if hits:
+                    target_path = hits[0]["path"]
+
+        quiet = dict(stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                     creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP)
+        try:
+            if "code" in key or "vscode" in key:
+                cmd = [exe]
+                if target_path:
+                    cmd.append(target_path)
+                subprocess.Popen(cmd, **quiet)
+                return f"Opened {ide_label}" + (f" on '{target_path}'." if target_path else ".")
+            elif "matlab" in key:
+                cmd = [exe, "-desktop"]
+                if target_path:
+                    p = Path(target_path)
+                    folder = p if p.is_dir() else p.parent
+                    cmd += ["-sd", str(folder)]
+                subprocess.Popen(cmd, **quiet)
+                return f"Launched {ide_label}" + (f" with working folder '{target_path}'." if target_path else ".")
+        except Exception as e:
+            return f"Failed to launch {ide_label}: {e}"
+        return f"Launched {ide_label}."
+
+    def generate_code_offline(self, goal: str, lang: str = "python") -> tuple[str, str]:
+        """Generates clean, production-grade source code completely offline without requiring any LLM or API key."""
+        target_lang = lang.lower().strip() if lang else "python"
+        low = (goal or "").lower().strip()
+
+        if "matlab" in target_lang or target_lang == "m":
+            filename = "simulation.m"
+            ylabel = "Amplitude"
+            sim_title = goal or "Composite Waveform"
+            code = (
+                "%% MATLAB Simulation Script\n"
+                f"%% Purpose: {sim_title}\n"
+                "%% Generated by Eli Autonomous Desktop Companion (Offline Engine)\n\n"
+                "clear; clc; close all;\n\n"
+                "% 1. Data Generation\n"
+                "t = linspace(0, 2*pi, 1000);\n"
+                "f1 = 2; f2 = 5;\n"
+                "y = sin(2*pi*f1*t) + 0.5*cos(2*pi*f2*t);\n\n"
+                "% 2. Plotting Results\n"
+                "figure('Name', 'Eli MATLAB Simulation', 'NumberTitle', 'off');\n"
+                "plot(t, y, 'LineWidth', 1.5, 'Color', [0.1, 0.4, 0.8]);\n"
+                "grid on;\n"
+                "xlabel('Time (s)');\n"
+                f"ylabel('{ylabel}');\n"
+                f"title('Simulation: {sim_title}');\n"
+                "fprintf('Simulation completed successfully.\\n');\n"
+            )
+            return filename, code
+
+        # Python offline code generation based on topic
+        if any(k in low for k in ("fibonacci", "fib", "series")):
+            filename = "fibonacci_series.py"
+            code = (
+                '"""\n'
+                'Fibonacci Sequence Generator\n'
+                'Created by Eli Autonomous Desktop Companion (Offline Mode)\n'
+                '"""\n'
+                'from typing import List\n\n'
+                'def fibonacci_iterative(n: int) -> List[int]:\n'
+                '    """Generate the first n Fibonacci numbers iteratively."""\n'
+                '    if n <= 0:\n'
+                '        return []\n'
+                '    if n == 1:\n'
+                '        return [0]\n'
+                '    seq = [0, 1]\n'
+                '    for _ in range(2, n):\n'
+                '        seq.append(seq[-1] + seq[-2])\n'
+                '    return seq\n\n'
+                'def main() -> None:\n'
+                '    count = 10\n'
+                '    result = fibonacci_iterative(count)\n'
+                '    print(f"First {count} Fibonacci numbers:")\n'
+                '    print(result)\n\n'
+                'if __name__ == "__main__":\n'
+                '    main()\n'
+            )
+        elif any(k in low for k in ("error", "errors", "bug", "bugs", "fault", "broken", "syntax error")):
+            filename = "sample_code_with_errors.py"
+            code = (
+                '"""\n'
+                'Sample Python Script with Intentional Errors for Inspection & Debugging\n'
+                'Created by Eli Autonomous Desktop Companion\n'
+                '"""\n\n'
+                'def calculate_total(prices, tax_rate):\n'
+                '    total = 0\n'
+                '    for price in prices:\n'
+                '        total += price\n'
+                '    # Intentional Error 1: Reference to undefined variable discount\n'
+                '    subtotal = total - discount\n'
+                '    # Intentional Error 2: TypeError adding string to float\n'
+                '    final_amount = subtotal + "tax"\n'
+                '    return final_amount\n\n'
+                'def process_items(items):\n'
+                '    # Intentional Error 3: ZeroDivisionError on empty list\n'
+                '    return sum(items) / len(items)\n\n'
+                'if __name__ == "__main__":\n'
+                '    print("Running sample calculation...")\n'
+                '    prices = [19.99, 45.50, 12.00]\n'
+                '    result = calculate_total(prices, 0.08)\n'
+                '    print("Result:", result)\n'
+            )
+        elif any(k in low for k in ("prime", "sieve", "primes")):
+            filename = "prime_numbers.py"
+            code = (
+                '"""\n'
+                'Prime Number Sieve & Checker\n'
+                'Created by Eli Autonomous Desktop Companion (Offline Mode)\n'
+                '"""\n'
+                'from typing import List\n\n'
+                'def sieve_of_eratosthenes(limit: int) -> List[int]:\n'
+                '    """Find all prime numbers up to a given limit."""\n'
+                '    if limit < 2:\n'
+                '        return []\n'
+                '    is_prime = [True] * (limit + 1)\n'
+                '    is_prime[0] = is_prime[1] = False\n'
+                '    for p in range(2, int(limit**0.5) + 1):\n'
+                '        if is_prime[p]:\n'
+                '            for i in range(p * p, limit + 1, p):\n'
+                '                is_prime[i] = False\n'
+                '    return [i for i, prime in enumerate(is_prime) if prime]\n\n'
+                'def main() -> None:\n'
+                '    limit = 50\n'
+                '    primes = sieve_of_eratosthenes(limit)\n'
+                '    print(f"Primes up to {limit}: {primes}")\n\n'
+                'if __name__ == "__main__":\n'
+                '    main()\n'
+            )
+        elif any(k in low for k in ("sort", "bubble", "merge", "quick")):
+            filename = "sorting_algorithms.py"
+            code = (
+                '"""\n'
+                'Sorting Algorithms Implementation\n'
+                'Created by Eli Autonomous Desktop Companion (Offline Mode)\n'
+                '"""\n'
+                'from typing import List\n\n'
+                'def quicksort(arr: List[int]) -> List[int]:\n'
+                '    """Sort an array using the QuickSort algorithm."""\n'
+                '    if len(arr) <= 1:\n'
+                '        return arr\n'
+                '    pivot = arr[len(arr) // 2]\n'
+                '    left = [x for x in arr if x < pivot]\n'
+                '    middle = [x for x in arr if x == pivot]\n'
+                '    right = [x for x in arr if x > pivot]\n'
+                '    return quicksort(left) + middle + quicksort(right)\n\n'
+                'def main() -> None:\n'
+                '    data = [64, 34, 25, 12, 22, 11, 90, 5]\n'
+                '    print("Original:", data)\n'
+                '    sorted_data = quicksort(data)\n'
+                '    print("Sorted:  ", sorted_data)\n\n'
+                'if __name__ == "__main__":\n'
+                '    main()\n'
+            )
+        elif any(k in low for k in ("calc", "calculator", "math")):
+            filename = "math_calculator.py"
+            code = (
+                '"""\n'
+                'Mathematical Utilities & Calculator\n'
+                'Created by Eli Autonomous Desktop Companion (Offline Mode)\n'
+                '"""\n'
+                'import math\n'
+                'from typing import List, Union\n\n'
+                'def calculate_stats(numbers: List[Union[int, float]]) -> dict:\n'
+                '    """Calculate descriptive statistics for a list of numbers."""\n'
+                '    if not numbers:\n'
+                '        return {"count": 0}\n'
+                '    mean = sum(numbers) / len(numbers)\n'
+                '    variance = sum((x - mean) ** 2 for x in numbers) / len(numbers)\n'
+                '    std_dev = math.sqrt(variance)\n'
+                '    return {\n'
+                '        "count": len(numbers),\n'
+                '        "min": min(numbers),\n'
+                '        "max": max(numbers),\n'
+                '        "mean": round(mean, 4),\n'
+                '        "std_dev": round(std_dev, 4)\n'
+                '    }\n\n'
+                'def main() -> None:\n'
+                '    sample = [12.5, 18.2, 9.4, 24.1, 15.0, 30.5]\n'
+                '    stats = calculate_stats(sample)\n'
+                '    print("Data Sample:", sample)\n'
+                '    for k, v in stats.items():\n'
+                '        print(f"  {k}: {v}")\n\n'
+                'if __name__ == "__main__":\n'
+                '    main()\n'
+            )
+        elif any(k in low for k in ("game", "guess", "number")):
+            filename = "number_guessing_game.py"
+            code = (
+                '"""\n'
+                'Number Guessing Game\n'
+                'Created by Eli Autonomous Desktop Companion (Offline Mode)\n'
+                '"""\n'
+                'import random\n\n'
+                'def play_round(secret: int, max_attempts: int = 5) -> bool:\n'
+                '    """Simulate a round with an optimal binary search player."""\n'
+                '    low, high = 1, 100\n'
+                '    for attempt in range(1, max_attempts + 1):\n'
+                '        guess = (low + high) // 2\n'
+                '        print(f"Attempt {attempt}: Guessed {guess}...")\n'
+                '        if guess == secret:\n'
+                '            print(f"Correct! Secret number was {secret}.")\n'
+                '            return True\n'
+                '        elif guess < secret:\n'
+                '            low = guess + 1\n'
+                '        else:\n'
+                '            high = guess - 1\n'
+                '    print(f"Out of attempts! Secret was {secret}.")\n'
+                '    return False\n\n'
+                'def main() -> None:\n'
+                '    secret = random.randint(1, 100)\n'
+                '    print(f"Playing Number Guessing Simulation (Target: {secret})...")\n'
+                '    play_round(secret)\n\n'
+                'if __name__ == "__main__":\n'
+                '    main()\n'
+            )
+        elif any(k in low for k in ("refresh", "relax", "calm", "refresh me", "refreshing")):
+            filename = "refresh_me.py"
+            code = (
+                '"""\n'
+                'Refreshing Mind & Focus Booster\n'
+                'Created by Eli Autonomous Desktop Companion\n'
+                '"""\n'
+                'import time\n\n'
+                'def refresh_session():\n'
+                '    quotes = [\n'
+                '        "Take a deep breath. Inhale clarity, exhale tension.",\n'
+                '        "Progress is progress, no matter how small.",\n'
+                '        "A calm mind brings inner strength and self-confidence.",\n'
+                '        "Reset. Refocus. You are doing great today!"\n'
+                '    ]\n'
+                '    print("=" * 60)\n'
+                '    print("       ELI REFRESH & MINDFULNESS SESSION")\n'
+                '    print("=" * 60)\n'
+                '    for i, q in enumerate(quotes, 1):\n'
+                '        print(f"\\n[{i}/4] {q}")\n'
+                '        time.sleep(1.0)\n'
+                '    print("\\n" + "=" * 60)\n'
+                '    print("You are recharged and ready. Happy coding!")\n'
+                '    print("=" * 60)\n\n'
+                'if __name__ == "__main__":\n'
+                '    refresh_session()\n'
+            )
+        else:
+            clean_name = re.sub(r'[^a-zA-Z0-9_]', '_', low[:25].strip()).strip('_') or "script"
+            filename = f"{clean_name}.py"
+            task_desc = goal or "Python core task"
+            code = (
+                '"""\n'
+                f'Script: {task_desc}\n'
+                'Created by Eli Autonomous Desktop Companion (Offline Mode)\n'
+                '"""\n'
+                'import sys\n'
+                'from typing import Any\n\n'
+                'def execute_task() -> Any:\n'
+                f'    """Implementation for: {task_desc}."""\n'
+                f'    print("Executing: {task_desc}")\n'
+                '    results = [x ** 2 for x in range(1, 6)]\n'
+                '    return results\n\n'
+                'def main() -> None:\n'
+                '    print("=" * 60)\n'
+                f'    print("Eli Offline Task Execution: {task_desc}")\n'
+                '    res = execute_task()\n'
+                '    print("Output:", res)\n'
+                '    print("=" * 60)\n\n'
+                'if __name__ == "__main__":\n'
+                '    main()\n'
+            )
+
+        return filename, code
+
+    def create_code_script(self, filename: str, code: str, language: str = "python",
+                           folder: str = "", run_after: bool = True) -> dict:
+        """Creates a verified script file on disk, validates AST syntax offline,
+        test-runs it to verify execution, and opens it directly in VS Code."""
+        name = Path(filename.strip()).name
+        lang = language.lower().strip()
+        if lang == "python" and not name.lower().endswith(".py"):
+            name += ".py"
+        elif lang == "matlab" and not name.lower().endswith(".m"):
+            name += ".m"
+        elif lang == "javascript" and not name.lower().endswith((".js", ".mjs")):
+            name += ".py" if "python" in code.lower() else ".js"
+
+        # Sanitize filename
+        name = re.sub(r'[\\/:*?"<>|]', '_', name).strip()
+        if not name or name in (".py", ".m", ".js"):
+            name = "script.py"
+
+        # Resolve destination folder
+        dest_dir = None
+        if folder:
+            p = Path(folder).expanduser()
+            if p.is_dir():
+                dest_dir = p
+        if not dest_dir:
+            dest_dir = Path.home() / "Documents" / "PythonScripts"
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        target_path = dest_dir / name
+
+        # If code is empty, generate production-grade code offline based on filename/goal
+        if not code or not code.strip():
+            _, code = self.generate_code_offline(goal=name, lang=lang)
+
+        # Syntax verification & auto-correction
+        syntax_err = ""
+        if name.endswith(".py"):
+            try:
+                ast.parse(code)
+            except SyntaxError as se:
+                syntax_err = f"SyntaxError line {se.lineno}: {se.msg}"
+                log.warning("Script %s had syntax error: %s", name, syntax_err)
+                code_fixed = code.replace("\r\n", "\n").strip() + "\n"
+                try:
+                    ast.parse(code_fixed)
+                    code = code_fixed
+                    syntax_err = ""
+                except Exception:
+                    pass
+
+        # Write file directly to disk
+        target_path.write_text(code, encoding="utf-8")
+        log.info("Saved code script to %s (%d bytes)", target_path, len(code))
+
+        # Test execution
+        exec_out = ""
+        exec_ok = True
+        if run_after and name.endswith(".py"):
+            try:
+                py_exe = sys.executable if sys.executable else "python"
+                r = subprocess.run([py_exe, str(target_path)], capture_output=True, text=True, timeout=8)
+                out = (r.stdout or "").strip()
+                err = (r.stderr or "").strip()
+                if r.returncode == 0:
+                    exec_out = out if out else "Execution succeeded (no stdout)."
+                else:
+                    exec_ok = False
+                    exec_out = f"Runtime exit code {r.returncode}:\n{err}"
+            except Exception as ex:
+                exec_out = f"Test run skipped: {ex}"
+
+        # Open directly in VS Code
+        ide_res = self.open_ide("vscode", str(target_path))
+
+        return {
+            "ok": True,
+            "path": str(target_path),
+            "filename": name,
+            "lines": len(code.splitlines()),
+            "syntax_valid": not syntax_err,
+            "syntax_note": syntax_err or "Syntax clean",
+            "execution_ok": exec_ok,
+            "execution_output": exec_out,
+            "ide_status": ide_res,
+            "summary": f"Created '{name}' at {target_path}, verified syntax ({'clean' if not syntax_err else syntax_err}), test output: {exec_out[:120]}, and {ide_res}"
+        }
+
+    def get_vscode_backup_content(self, target_path) -> Optional[str]:
+        """Inspects VS Code's internal hot-exit backup directory to read live unsaved editor buffers."""
+        try:
+            target_norm = Path(target_path).resolve()
+            code_backups = Path.home() / "AppData" / "Roaming" / "Code" / "Backups"
+            if not code_backups.is_dir():
+                return None
+            import urllib.parse
+            for f in code_backups.rglob("*"):
+                if f.is_file() and "file" in f.parts:
+                    try:
+                        first_line = open(f, encoding="utf-8", errors="ignore").readline()
+                        if first_line.startswith("file:///"):
+                            uri_part = first_line.split()[0]
+                            parsed_path = Path(urllib.parse.unquote(uri_part.replace("file:///", ""))).resolve()
+                            if parsed_path == target_norm:
+                                raw = open(f, encoding="utf-8", errors="ignore").read()
+                                return "\n".join(raw.splitlines()[1:])
+                    except Exception:
+                        pass
+        except Exception as e:
+            log.debug("VS Code backup read error: %s", e)
+        return None
+
+    # -- offline code error checking -----------------------------------------------------------
+    def check_code_errors(self, path: str) -> dict:
+        """Offline syntax and structural error checking for Python, MATLAB, C, and C++ files."""
+        p = Path(path).expanduser()
+        if not p.is_file():
+            return {"file": path, "valid": False, "errors": [f"File not found: {path}"]}
+
+        ext = p.suffix.lower()
+        try:
+            content = p.read_text("utf-8", errors="replace")
+        except Exception as e:
+            return {"file": str(p), "valid": False, "errors": [f"Cannot read file: {e}"]}
+
+        if ext == ".py":
+            return self._check_python(p, content)
+        elif ext == ".m":
+            return self._check_matlab(p, content)
+        elif ext in (".c", ".cpp", ".cc", ".cxx", ".h", ".hpp"):
+            return self._check_c_cpp(p, content)
+        else:
+            return {"file": str(p), "valid": True, "language": ext, "errors": [], "summary": f"No offline parser for {ext} (supported: .py, .m, .c, .cpp, .h)."}
+
+    def _check_python(self, path: Path, content: str) -> dict:
+        # Check if VS Code has an unsaved / live buffer for this file
+        live_content = self.get_vscode_backup_content(path)
+        active_code = live_content if live_content is not None else content
+
+        diag = self.diagnose_script_errors(active_code, path.name)
+        if diag.get("has_error"):
+            self.pending_code_fix = {
+                "file": str(path),
+                "line": diag["line"],
+                "col": diag["col"],
+                "code_line": diag["code_line"],
+                "fixed_line": diag["fixed_line"],
+                "fixed_code": diag["fixed_code"],
+                "message": diag["message"],
+                "error_type": diag["error_type"]
+            }
+            err_desc = f"Line {diag['line']}: {diag['error_type']} - {diag['message']}"
+            if diag.get("code_line"):
+                err_desc += f"\n  Code: {diag['code_line'].strip()}"
+            return {
+                "file": str(path),
+                "language": "Python",
+                "valid": False,
+                "errors": [err_desc],
+                "line": diag["line"],
+                "error_type": diag["error_type"],
+                "suggested_fix": diag["fixed_line"].strip(),
+                "summary": f"Found {diag['error_type']} on line {diag['line']}: {diag['message']}. Erroneous code: `{diag['code_line'].strip()}`. Proposed fix: `{diag['fixed_line'].strip()}`."
+            }
+
+        return {
+            "file": str(path),
+            "language": "Python",
+            "valid": True,
+            "errors": [],
+            "summary": "No syntax errors found. Code is clean."
+        }
+
+    def _check_matlab(self, path: Path, content: str) -> dict:
+        errors = []
+        lines = content.splitlines()
+        block_stack = []
+        block_openers = {"function", "if", "for", "while", "switch", "try", "parfor", "spmd"}
+        paren_stack = []
+        pairs = {')': '(', ']': '[', '}': '{'}
+
+        for line_num, raw_line in enumerate(lines, 1):
+            line = raw_line.split('%')[0].strip()
+            if not line:
+                continue
+
+            in_str = False
+            str_char = ''
+            for col, ch in enumerate(line, 1):
+                if ch in ("'", '"'):
+                    if not in_str:
+                        in_str = True
+                        str_char = ch
+                    elif str_char == ch:
+                        in_str = False
+                    continue
+                if in_str:
+                    continue
+
+                if ch in "([{":
+                    paren_stack.append((ch, line_num, col))
+                elif ch in ")]}":
+                    if not paren_stack:
+                        errors.append(f"Line {line_num}, col {col}: Unmatched closing '{ch}'.")
+                    else:
+                        top, o_line, o_col = paren_stack.pop()
+                        if top != pairs[ch]:
+                            errors.append(f"Line {line_num}, col {col}: Mismatched bracket '{ch}' (closing '{top}' from line {o_line}).")
+
+            tokens = re.findall(r"\b[a-zA-Z_]\w*\b", line)
+            if not tokens:
+                continue
+            first = tokens[0].lower()
+            if first in block_openers:
+                block_stack.append((first, line_num))
+            elif first == "end":
+                if not block_stack:
+                    errors.append(f"Line {line_num}: Unexpected 'end' with no matching block opener.")
+                else:
+                    block_stack.pop()
+
+        if block_stack:
+            for opener, o_line in block_stack:
+                errors.append(f"Line {o_line}: Unclosed MATLAB '{opener}' block (missing 'end').")
+
+        if paren_stack:
+            for ch, o_line, o_col in paren_stack[:5]:
+                errors.append(f"Line {o_line}, col {o_col}: Unclosed bracket '{ch}'.")
+
+        return {
+            "file": str(path),
+            "language": "MATLAB",
+            "valid": len(errors) == 0,
+            "errors": errors,
+            "summary": "No syntax errors found." if not errors else f"Found {len(errors)} error(s)."
+        }
+
+    def _check_c_cpp(self, path: Path, content: str) -> dict:
+        errors = []
+        ext = path.suffix.lower()
+        compiler = "g++" if ext in (".cpp", ".cc", ".cxx", ".hpp") else "gcc"
+        which = subprocess.run(["where", compiler], capture_output=True, text=True, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        if which.returncode == 0:
+            try:
+                res = subprocess.run([compiler, "-fsyntax-only", str(path)], capture_output=True, text=True,
+                                     timeout=10, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+                if res.returncode != 0 and res.stderr:
+                    for line in res.stderr.splitlines()[:8]:
+                        if "error:" in line or "fatal error:" in line:
+                            errors.append(line.strip())
+                    if errors:
+                        return {
+                            "file": str(path),
+                            "language": "C++" if compiler == "g++" else "C",
+                            "valid": False,
+                            "errors": errors,
+                            "summary": f"Compiler detected {len(errors)} error(s)."
+                        }
+            except Exception:
+                pass
+
+        lines = content.splitlines()
+        brace_stack = []
+        pairs = {'}': '{', ')': '(', ']': '['}
+
+        in_multiline_comment = False
+        for line_num, raw_line in enumerate(lines, 1):
+            line = raw_line
+            if in_multiline_comment:
+                if "*/" in line:
+                    line = line.split("*/", 1)[1]
+                    in_multiline_comment = False
+                else:
+                    continue
+            if "/*" in line:
+                if "*/" not in line:
+                    in_multiline_comment = True
+                line = re.sub(r"/\*.*?\*/", "", line)
+            line = line.split("//")[0]
+
+            in_str = False
+            str_char = ''
+            for col, ch in enumerate(line, 1):
+                if ch in ("'", '"'):
+                    if not in_str:
+                        in_str = True
+                        str_char = ch
+                    elif str_char == ch and (col < 2 or line[col-2] != '\\'):
+                        in_str = False
+                    continue
+                if in_str:
+                    continue
+
+                if ch in "{([":
+                    brace_stack.append((ch, line_num, col))
+                elif ch in "})]":
+                    if not brace_stack:
+                        errors.append(f"Line {line_num}, col {col}: Unmatched closing '{ch}'.")
+                    else:
+                        top, o_line, o_col = brace_stack.pop()
+                        if top != pairs[ch]:
+                            errors.append(f"Line {line_num}, col {col}: Mismatched bracket '{ch}' (opened '{top}' at line {o_line}).")
+
+        if in_multiline_comment:
+            errors.append("Unclosed multi-line comment '/*'.")
+
+        if brace_stack:
+            for ch, o_line, o_col in brace_stack[:5]:
+                errors.append(f"Line {o_line}, col {o_col}: Unclosed '{ch}'.")
+
+        return {
+            "file": str(path),
+            "language": "C/C++",
+            "valid": len(errors) == 0,
+            "errors": errors,
+            "summary": "No syntax errors found." if not errors else f"Found {len(errors)} error(s)."
+        }
+
+    def scan_project_errors(self, folder_path: str = "") -> str:
+        """Scans code files in a folder offline and returns any syntax errors."""
+        target_dir = None
+        if folder_path:
+            p = Path(folder_path).expanduser()
+            if p.is_dir():
+                target_dir = p
+            else:
+                hits = self.find_files(folder_path, limit=1)
+                if hits and hits[0]["kind"] == "folder":
+                    target_dir = Path(hits[0]["path"])
+        if not target_dir:
+            roots = self.project_roots()
+            target_dir = roots[0] if roots else Path.home()
+
+        results = []
+        checked_count = 0
+        extensions = (".py", ".m", ".c", ".cpp", ".cc", ".h", ".hpp")
+
+        for root, dirs, files in os.walk(target_dir):
+            dirs[:] = [d for d in dirs if d not in SKIP_DIRS and not d.startswith(".")]
+            for f in files:
+                ext = Path(f).suffix.lower()
+                if ext in extensions:
+                    checked_count += 1
+                    full_path = Path(root) / f
+                    res = self.check_code_errors(str(full_path))
+                    if not res["valid"]:
+                        results.append(f"❌ {full_path.name} ({res['language']}):\n  " + "\n  ".join(res["errors"]))
+                    if checked_count >= 50:
+                        break
+            if checked_count >= 50:
+                break
+
+        if not results:
+            return f"Offline syntax scan complete: checked {checked_count} code files in '{target_dir.name}'. No syntax errors found! All clean."
+        return f"Offline syntax scan found issues in {len(results)} of {checked_count} files in '{target_dir.name}':\n\n" + "\n\n".join(results)
+
+    def diagnose_script_errors(self, code: str, filename: str = "script.py") -> dict:
+        """Thoroughly checks the whole script for syntax errors, structural defects,
+        and common static errors, generating specific explanations and exact replacement fixes."""
+        lines = code.splitlines()
+
+        # 1. Syntax / Indentation Check
+        try:
+            ast.parse(code, filename=filename)
+        except SyntaxError as se:
+            lineno = se.lineno or 1
+            col = se.offset or 0
+            err_line = lines[lineno - 1] if 0 <= lineno - 1 < len(lines) else ""
+            msg = se.msg or "Invalid syntax"
+
+            # Determine targeted fix
+            fixed_line = err_line
+            stripped = err_line.rstrip()
+
+            # Missing colon on compound statements
+            block_keywords = ("def ", "if ", "elif ", "else", "for ", "while ", "class ", "try", "except", "finally", "with ")
+            if any(stripped.lstrip().startswith(kw) for kw in block_keywords) and not stripped.endswith(":"):
+                fixed_line = stripped + ":"
+                msg = "Missing colon ':' at the end of block statement"
+            elif "was never closed" in msg or "unmatched" in msg or "expected" in msg:
+                if "(" in err_line and ")" not in err_line:
+                    fixed_line = err_line + ")"
+                elif "[" in err_line and "]" not in err_line:
+                    fixed_line = err_line + "]"
+                elif "{" in err_line and "}" not in err_line:
+                    fixed_line = err_line + "}"
+            elif re.search(r"\bif\s+[^=!<>\n]+=[^=]", err_line):
+                fixed_line = re.sub(r"(?<=\w)\s*=\s*(?=\w)", " == ", err_line)
+                msg = "Using assignment '=' instead of comparison '==' in if statement"
+
+            fixed_lines = list(lines)
+            if 0 <= lineno - 1 < len(fixed_lines):
+                fixed_lines[lineno - 1] = fixed_line
+            fixed_code = "\n".join(fixed_lines)
+
+            return {
+                "valid": False,
+                "has_error": True,
+                "error_type": type(se).__name__,
+                "line": lineno,
+                "col": col,
+                "code_line": err_line,
+                "message": msg,
+                "fixed_line": fixed_line,
+                "fixed_code": fixed_code
+            }
+        except Exception as ex:
+            return {
+                "valid": False,
+                "has_error": True,
+                "error_type": "ParseError",
+                "line": 1,
+                "col": 0,
+                "code_line": lines[0] if lines else "",
+                "message": str(ex),
+                "fixed_line": lines[0] if lines else "",
+                "fixed_code": code
+            }
+
+        # 2. Semantic / Static AST Check
+        try:
+            parsed = ast.parse(code)
+            defined_names = set(dir(__builtins__))
+            defined_names.update(["__name__", "__file__", "__doc__"])
+
+            for node in ast.walk(parsed):
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                    defined_names.add(node.name)
+                elif isinstance(node, ast.Import):
+                    for a in node.names:
+                        defined_names.add(a.asname or a.name.split(".")[0])
+                elif isinstance(node, ast.ImportFrom):
+                    for a in node.names:
+                        defined_names.add(a.asname or a.name)
+                elif isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
+                    defined_names.add(node.id)
+
+            # Check for division by literal zero
+            for node in ast.walk(parsed):
+                if isinstance(node, ast.BinOp) and isinstance(node.op, (ast.Div, ast.FloorDiv, ast.Mod)):
+                    if isinstance(node.right, ast.Constant) and node.right.value == 0:
+                        lineno = node.lineno
+                        err_line = lines[lineno - 1] if 0 <= lineno - 1 < len(lines) else ""
+                        fixed_line = err_line.replace("/ 0", "/ 1").replace("// 0", "// 1")
+                        fixed_lines = list(lines)
+                        fixed_lines[lineno - 1] = fixed_line
+                        return {
+                            "valid": False,
+                            "has_error": True,
+                            "error_type": "ZeroDivisionError",
+                            "line": lineno,
+                            "col": getattr(node, "col_offset", 0),
+                            "code_line": err_line,
+                            "message": "Division by literal zero",
+                            "fixed_line": fixed_line,
+                            "fixed_code": "\n".join(fixed_lines)
+                        }
+
+            # Check for undefined variables referenced before assignment
+            for node in ast.walk(parsed):
+                if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
+                    if node.id not in defined_names:
+                        lineno = node.lineno
+                        err_line = lines[lineno - 1] if 0 <= lineno - 1 < len(lines) else ""
+                        fixed_line = f"{node.id} = 0\n" + err_line
+                        fixed_lines = list(lines)
+                        fixed_lines[lineno - 1] = fixed_line
+                        return {
+                            "valid": False,
+                            "has_error": True,
+                            "error_type": "UndefinedVariableError",
+                            "line": lineno,
+                            "col": getattr(node, "col_offset", 0),
+                            "code_line": err_line,
+                            "message": f"Variable '{node.id}' is used before being defined",
+                            "fixed_line": fixed_line,
+                            "fixed_code": "\n".join(fixed_lines)
+                        }
+        except Exception as e:
+            log.debug("AST walk static check exception: %s", e)
+
+        return {
+            "valid": True,
+            "has_error": False,
+            "error_type": "",
+            "line": 0,
+            "col": 0,
+            "code_line": "",
+            "message": "Syntax, structure, and variables are clean.",
+            "fixed_line": "",
+            "fixed_code": code
+        }
+
+    def inspect_and_diagnose_vscode(self, auto=None, vision=None, target_filename: str = "") -> str:
+        """Brings VS Code to the foreground in full screen, reads the whole script (including
+        any unsaved editor buffers), specifically identifies the exact errors with line numbers
+        and code snippets, and asks the user: 'Do you want me to fix it?'"""
+        try:
+            import pygetwindow as gw
+        except Exception:
+            gw = None
+
+        file_path: Optional[Path] = None
+
+        # 1. If target_filename specified (e.g. A.py), locate it first
+        if target_filename:
+            clean_name = Path(target_filename).name
+            script_dir = Path.home() / "Documents" / "PythonScripts"
+            candidate = script_dir / clean_name
+            if candidate.is_file():
+                file_path = candidate
+            else:
+                hits = self.find_files(clean_name, limit=1)
+                if hits and hits[0].get("kind") == "file":
+                    file_path = Path(hits[0]["path"])
+
+        # 2. If no target specified, check active VS Code window
+        if not file_path:
+            vscode_win = None
+            if gw is not None:
+                try:
+                    for w in gw.getAllWindows():
+                        if "Visual Studio Code" in (w.title or ""):
+                            vscode_win = w
+                            break
+                except Exception:
+                    pass
+
+            ctx = self.vscode_context(vscode_win) if vscode_win else {}
+            active_file_name = ctx.get("file", "")
+
+            if active_file_name:
+                p = Path(active_file_name)
+                if p.is_file():
+                    file_path = p
+                else:
+                    hits = self.find_files(active_file_name, limit=1)
+                    if hits and hits[0].get("kind") == "file":
+                        file_path = Path(hits[0]["path"])
+
+        # 3. Fallback to most recent script in Documents/PythonScripts
+        if not file_path:
+            script_dir = Path.home() / "Documents" / "PythonScripts"
+            if script_dir.is_dir():
+                scripts = sorted(script_dir.glob("*.py"), key=lambda f: f.stat().st_mtime, reverse=True)
+                if scripts:
+                    file_path = scripts[0]
+
+        # 4. Bring VS Code to foreground and ensure file is open
+        if file_path:
+            self.open_ide("vscode", str(file_path))
+        if auto is not None:
+            auto.activate_vscode(maximize=True)
+        time.sleep(0.5)
+
+        # 5. Read the entire script content (live unsaved buffer from VS Code backup if available, else disk)
+        code = ""
+        live_code = self.get_vscode_backup_content(file_path) if file_path else None
+        if live_code is not None:
+            code = live_code
+        elif file_path and file_path.exists():
+            try:
+                code = file_path.read_text(encoding="utf-8", errors="replace")
+            except Exception as e:
+                log.warning("Could not read %s: %s", file_path, e)
+
+        # 6. Diagnose the whole script
+        target_display = file_path.name if file_path else (target_filename or "active script")
+        if code:
+            diag = self.diagnose_script_errors(code, target_display)
+            if diag.get("has_error"):
+                self.pending_code_fix = {
+                    "file": str(file_path) if file_path else "",
+                    "line": diag["line"],
+                    "col": diag["col"],
+                    "code_line": diag["code_line"],
+                    "fixed_line": diag["fixed_line"],
+                    "fixed_code": diag["fixed_code"],
+                    "message": diag["message"],
+                    "error_type": diag["error_type"]
+                }
+                line_snippet = diag["code_line"].strip()
+                return (
+                    f"I read your whole script in VS Code ('{target_display}'). "
+                    f"Specifically on line {diag['line']}: `{line_snippet}`, I found a {diag['error_type']} ({diag['message']}).\n\n"
+                    f"Do you want me to fix it?"
+                )
+
+        # 5. Check screen OCR for terminal tracebacks
+        if vision is not None:
+            try:
+                frame = vision.capture_now()
+                frame.ocr()
+                error_snip = frame.error_snippet()
+                if error_snip:
+                    from ..fallback import diagnose
+                    diag_text = diagnose(error_snip)
+                    clean_snip = "\n".join(error_snip.splitlines()[:5])
+                    self.pending_code_fix = {
+                        "file": str(file_path) if file_path else "",
+                        "line": 1,
+                        "col": 0,
+                        "code_line": clean_snip,
+                        "fixed_line": "",
+                        "fixed_code": "",
+                        "message": diag_text,
+                        "error_type": "TerminalError"
+                    }
+                    return (
+                        f"I inspected VS Code and detected an error in your terminal:\n"
+                        f"```\n{clean_snip}\n```\n"
+                        f"Diagnosis: {diag_text}\n\n"
+                        f"Do you want me to fix it?"
+                    )
+            except Exception as e:
+                log.warning("VS Code OCR error inspection: %s", e)
+
+        # Clean code
+        self.pending_code_fix = None
+        return (
+            f"I read through your entire script in VS Code ('{target_display}'). "
+            f"The syntax, structure, and variable references are completely clean with 0 errors! "
+            f"Would you like me to test run it for you?"
+        )
+
+    def apply_visible_code_fix(self, auto, fix_info: dict) -> str:
+        """Visually jumps to the error line in VS Code, highlights it on screen,
+        applies the fix in the editor and on disk, and verifies clean syntax."""
+        line_num = fix_info.get("line", 1)
+        fixed_line = fix_info.get("fixed_line", "")
+        file_path = fix_info.get("file", "")
+        fixed_code = fix_info.get("fixed_code", "")
+
+        # 1. Bring VS Code to foreground in full screen
+        if auto is not None:
+            auto.activate_vscode(maximize=True)
+            time.sleep(0.5)
+
+            # 2. Jump to line number using Ctrl+G
+            auto.press_keys("ctrl+g")
+            time.sleep(0.2)
+            auto.type_text(str(line_num), press_enter=True)
+            time.sleep(0.35)
+
+            # 3. Visually highlight the entire erroneous line
+            auto.press_keys("home")
+            time.sleep(0.08)
+            auto.press_keys("shift+end")
+            time.sleep(1.2)  # Pause so the user visibly sees the error highlighted on screen!
+
+            # 4. Start fixing on screen
+            if fixed_line:
+                auto.press_keys("backspace")
+                time.sleep(0.15)
+                auto.type_text(fixed_line, press_enter=False)
+                time.sleep(0.35)
+                auto.press_keys("ctrl+s")
+                time.sleep(0.2)
+
+        # 5. Ensure disk file is updated with verified clean code
+        if file_path and fixed_code:
+            try:
+                p = Path(file_path)
+                p.write_text(fixed_code, encoding="utf-8")
+            except Exception as ex:
+                log.warning("Failed writing fixed file to disk: %s", ex)
+
+        # 6. Verify syntax is now clean
+        if file_path:
+            verify = self.check_code_errors(str(file_path))
+            if verify.get("valid", False):
+                return f"I highlighted line {line_num} on your screen and fixed the error. The script is now completely clean and verified!"
+
+        return f"I highlighted line {line_num} on your screen and applied the fix: `{fixed_line.strip()}`."

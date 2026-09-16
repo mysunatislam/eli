@@ -1,0 +1,52 @@
+:root {
+  --panel: rgba(21, 24, 34, 0.9);
+  --ink: #EEF1F7; --ink-2: #B7BFCF; --muted: #7F899C; --line: rgba(255, 255, 255, .1);
+  --accent: #F0567A; --teal: #2DC8C4; --gold: #FFD166; --ok: #4ED28C; --rec: #FF3B30;
+  --font: "Segoe UI", system-ui, -apple-system, sans-serif;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; width: 100%; height: 100%; background: transparent; overflow: hidden; font-family: var(--font); color: var(--ink); }
+[hidden] { display: none !important; }
+#fx { position: absolute; inset: 0; width: 100%; height: 100%; }
+
+/* Compact step card: one step at a time, docked in a corner, never over the middle of the screen. */
+.card {
+  position: absolute; right: 20px; top: 20px; left: auto; bottom: auto; width: 330px;
+  background: var(--panel); border: 1px solid var(--line); border-left: 3px solid var(--teal); border-radius: 12px;
+  padding: 8px 12px 8px; box-shadow: 0 10px 30px rgba(0, 0, 0, .45); animation: enter .22s cubic-bezier(.2, .8, .2, 1);
+  backdrop-filter: blur(6px);
+}
+.card.bottom { top: auto; bottom: 20px; }
+.card.left { right: auto; left: 20px; }
+.card.done { border-left-color: var(--ok); }
+.card.stuck { border-left-color: var(--gold); }
+.card.paused { opacity: .5; }
+@keyframes enter { from { transform: translateY(-8px) scale(.97); opacity: 0; } to { transform: none; opacity: 1; } }
+.card-head { display: flex; align-items: center; gap: 8px; font-size: 10px; letter-spacing: .12em; color: var(--teal); text-transform: uppercase; }
+.card-app { color: var(--muted); letter-spacing: .04em; text-transform: none; margin-left: auto; }
+.mini-heart { width: 10px; height: 10px; background: var(--accent); display: inline-block; transform: rotate(-45deg) scale(.8); position: relative; border-radius: 0 0 2px 0; }
+.mini-heart::before, .mini-heart::after { content: ""; position: absolute; width: 10px; height: 10px; background: var(--accent); border-radius: 50%; }
+.mini-heart::before { left: -5px; top: 0; } .mini-heart::after { left: 0; top: -5px; }
+.card-title { font-size: 14.5px; font-weight: 650; margin: 4px 0 2px; }
+.card-text { font-size: 12px; line-height: 1.4; color: var(--ink-2); display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.card-foot { display: flex; align-items: center; gap: 10px; margin-top: 6px; }
+.dots { display: flex; gap: 4px; }
+.dots i { width: 6px; height: 6px; border-radius: 50%; background: rgba(255, 255, 255, .15); }
+.dots i.done { background: var(--ok); } .dots i.now { background: var(--teal); box-shadow: 0 0 0 2px rgba(45, 200, 196, .25); }
+.key { font-family: "Cascadia Code", Consolas, monospace; font-size: 12px; padding: 2px 8px; border: 1px solid rgba(255, 255, 255, .35); border-bottom-width: 3px; border-radius: 6px; background: rgba(255, 255, 255, .08); animation: keypress 1.4s infinite; }
+@keyframes keypress { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(2px); border-bottom-width: 1px; } }
+.hint { margin-left: auto; font-size: 10px; color: var(--muted); }
+.voice { display: inline-flex; align-items: flex-end; gap: 2px; height: 12px; margin-left: 4px; }
+.voice i { width: 3px; background: var(--accent); border-radius: 2px; animation: bars .8s infinite ease-in-out; }
+.voice i:nth-child(1) { height: 5px; } .voice i:nth-child(2) { height: 10px; animation-delay: .15s; } .voice i:nth-child(3) { height: 7px; animation-delay: .3s; }
+@keyframes bars { 0%, 100% { transform: scaleY(.5); } 50% { transform: scaleY(1.3); } }
+
+/* Small toast along the top edge (recognition, hints, completion). */
+.banner {
+  position: absolute; left: 50%; top: 14px; transform: translateX(-50%); padding: 8px 16px; border-radius: 999px;
+  background: var(--panel); border: 1px solid rgba(78, 210, 140, .5); color: var(--ink); font-size: 13.5px; font-weight: 600;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, .45); animation: enterc .25s cubic-bezier(.2, .8, .2, 1); text-align: center; max-width: 60vw;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.banner small { display: inline; font-size: 12px; color: var(--ink-2); font-weight: 400; margin-left: 8px; }
+@keyframes enterc { from { transform: translateX(-50%) translateY(-8px); opacity: 0; } to { transform: translateX(-50%) translateY(0); opacity: 1; } }

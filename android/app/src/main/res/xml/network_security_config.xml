@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <!-- The Eli backend speaks plain HTTP on your LAN; allow it. -->
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>
