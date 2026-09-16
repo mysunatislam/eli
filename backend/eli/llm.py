@@ -335,6 +335,11 @@ class OpenAICompatibleProvider:
                 ptype = p.get("type")
                 if ptype == "text":
                     text_chunks.append(p.get("text", ""))
+                elif ptype == "image":
+                    mtype = p.get("media_type", "image/jpeg")
+                    b64 = p.get("data", "")
+                    if b64:
+                        text_chunks.append({"type": "image_url", "image_url": {"url": f"data:{mtype};base64,{b64}"}})
                 elif ptype == "tool_call":
                     tool_calls.append({
                         "id": p.get("id", f"call_{secrets.token_hex(4)}"),
@@ -356,13 +361,24 @@ class OpenAICompatibleProvider:
             if role == "assistant":
                 msg = {"role": "assistant"}
                 if text_chunks:
-                    msg["content"] = "\n".join(text_chunks)
+                    msg["content"] = "\n".join(t for t in text_chunks if isinstance(t, str))
                 if tool_calls:
                     msg["tool_calls"] = tool_calls
                 if "content" in msg or "tool_calls" in msg:
                     messages.append(msg)
             elif role == "user" and text_chunks:
-                messages.append({"role": "user", "content": "\n".join(text_chunks)})
+                # Handle multimodal or pure text
+                has_complex = any(isinstance(x, dict) for x in text_chunks)
+                if has_complex:
+                    parts = []
+                    for x in text_chunks:
+                        if isinstance(x, str):
+                            parts.append({"type": "text", "text": x})
+                        else:
+                            parts.append(x)
+                    messages.append({"role": "user", "content": parts})
+                else:
+                    messages.append({"role": "user", "content": "\n".join(text_chunks)})
         return messages
 
     def _tools(self, tools: list[dict]) -> list[dict]:
@@ -392,6 +408,12 @@ class OpenAICompatibleProvider:
 
         try:
             resp = await self.client.post("/chat/completions", json=body)
+            if resp.status_code == 400 and "tools" in resp.text and "tools" in body:
+                # Fallback for local models that don't support OpenAI tools parameter
+                del body["tools"]
+                if "tool_choice" in body:
+                    del body["tool_choice"]
+                resp = await self.client.post("/chat/completions", json=body)
             if resp.status_code == 429:
                 raise TransientError("Rate limit / quota exceeded")
             if resp.status_code >= 500:
@@ -687,6 +709,28 @@ def _is_local_service_alive(port: int, host: str = "127.0.0.1") -> bool:
         return False
 
 
+def _detect_ollama_model(base_url: str = "http://127.0.0.1:11434") -> str:
+    """Auto-detect downloaded models in Ollama, prioritizing gemma2, llama3, qwen."""
+    env_model = os.getenv("ELI_OLLAMA_MODEL", "").strip()
+    if env_model:
+        return env_model
+    try:
+        import urllib.request
+        req = urllib.request.Request(f"{base_url.rstrip('/')}/api/tags", headers={"User-Agent": "Eli"})
+        with urllib.request.urlopen(req, timeout=1.2) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            models = [m.get("name", "").lower() for m in data.get("models", [])]
+            for pref in ("gemma2", "gemma", "llama3.2", "llama3.1", "llama3", "qwen2.5", "mistral", "phi3"):
+                for m in models:
+                    if pref in m:
+                        return m
+            if models:
+                return models[0]
+    except Exception:
+        pass
+    return "gemma2"
+
+
 # -- facade ------------------------------------------------------------------------------------------
 class LLM:
     def __init__(self):
@@ -730,7 +774,7 @@ class LLM:
             try:
                 if name == "ollama":
                     base = os.getenv("OLLAMA_HOST", "http://127.0.0.1:11434")
-                    model = os.getenv("ELI_OLLAMA_MODEL", "llama3.2")
+                    model = _detect_ollama_model(base)
                     self.provider = OpenAICompatibleProvider("ollama", f"{base}/v1", model, "ollama")
                 elif name == "lmstudio":
                     base = os.getenv("LOCAL_LLM_URL", "http://127.0.0.1:1234")
@@ -778,6 +822,30 @@ class LLM:
     def model(self) -> str:
         return self.provider.model if self.provider else "eli-offline-engine"
 
+    async def _fallback_local_or_offline(self, system: tuple[str, str], turns: list[dict],
+                                          tools: Optional[list[dict]] = None, on_text: OnText = None) -> LLMResponse:
+        """Seamlessly falls back to local models (Ollama Gemma/Llama, LM Studio) before offline engine."""
+        if _is_local_service_alive(11434):
+            try:
+                base = os.getenv("OLLAMA_HOST", "http://127.0.0.1:11434")
+                m = _detect_ollama_model(base)
+                log.info("Cloud quota exhausted or connection down; seamlessly routing to local Ollama model '%s'", m)
+                local_prov = OpenAICompatibleProvider("ollama", f"{base}/v1", m, "ollama")
+                return await local_prov.complete(system, turns, tools or [], on_text)
+            except Exception as ex:
+                log.warning("Local Ollama fallback failed (%s); switching to offline engine", ex)
+        elif _is_local_service_alive(1234):
+            try:
+                base = os.getenv("LOCAL_LLM_URL", "http://127.0.0.1:1234")
+                m = os.getenv("LOCAL_LLM_MODEL", "local-model")
+                log.info("Cloud quota exhausted or connection down; seamlessly routing to LM Studio model '%s'", m)
+                local_prov = OpenAICompatibleProvider("lmstudio", f"{base}/v1", m, "not-needed")
+                return await local_prov.complete(system, turns, tools or [], on_text)
+            except Exception as ex:
+                log.warning("LM Studio fallback failed (%s); switching to offline engine", ex)
+        offline_prov = OfflineLocalProvider()
+        return await offline_prov.complete(system, turns, tools or [], on_text)
+
     async def complete(self, system: tuple[str, str], turns: list[dict], tools: Optional[list[dict]] = None,
                        on_text: OnText = None) -> LLMResponse:
         delays = (0.0, 1.5, 3.0)
@@ -798,21 +866,19 @@ class LLM:
             except Exception as e:
                 s = str(e).lower()
                 # If network fails, DNS fails (getaddrinfo), quota exceeded, or rate limit:
-                # Automatically and seamlessly fall back to the offline local provider!
+                # Automatically and seamlessly fall back to local Ollama (Gemma/Llama) or offline engine!
                 if any(k in s for k in ("getaddrinfo", "connection", "unreachable", "429", "quota", "resource_exhausted")):
-                    log.warning("Online LLM unreachable (%s); seamlessly falling back to offline local engine.", e)
-                    offline_prov = OfflineLocalProvider()
-                    return await offline_prov.complete(system, turns, tools or [], on_text)
+                    log.warning("Online LLM quota exhausted or unreachable (%s); seamlessly falling back to local engine.", e)
+                    return await self._fallback_local_or_offline(system, turns, tools, on_text)
                 if isinstance(e, TransientError) or _transient(e):
                     last = e
                     self.usage["errors"] += 1
                     log.warning("transient LLM error (attempt %d/%d): %s", attempt + 1, len(delays), e)
                 else:
                     raise e
-        # If all retries exhausted, seamless offline fallback rather than crashing
-        log.warning("All online retries exhausted (%s); falling back to offline local engine.", last)
-        offline_prov = OfflineLocalProvider()
-        return await offline_prov.complete(system, turns, tools or [], on_text)
+        # If all retries exhausted, seamless local/offline fallback rather than crashing
+        log.warning("All online retries exhausted (%s); falling back to local/offline engine.", last)
+        return await self._fallback_local_or_offline(system, turns, tools, on_text)
 
     def describe_error(self, e: Exception) -> str:
         s = str(e)

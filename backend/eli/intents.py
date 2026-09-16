@@ -150,7 +150,7 @@ def extract_persona_switch(text: str) -> Optional[tuple[str, list[str]]]:
     from .personas import find_persona_by_query
     
     is_switch_phrase = (
-        re.search(r"\b(switch|change|set|turn|become|use|choose)\b", t) is not None or
+        re.search(r"\b(switch|change|set|turn|become|use|choose|call|see|talk to|speak to|bring up|give me|connect me to|show me|i want|wake up)\b", t) is not None or
         re.search(r"\b(el+i+e?|ally|allie)\s+(for|to|as)\b", t) is not None or
         re.search(r"\b(version\s+of\s+(el+i+e?|ally|allie))\b", t) is not None or
         re.search(r"\b(masculine|feminine|male|female)\b", t) is not None
@@ -160,7 +160,7 @@ def extract_persona_switch(text: str) -> Optional[tuple[str, list[str]]]:
     if matched and is_switch_phrase:
         return "switch_persona", [matched.id]
     
-    if t in ("atlas", "aria", "zephyr", "mentor", "classic", "hotel eli", "agency eli", "event eli", "teach me eli", "masculine", "feminine"):
+    if t in ("atlas", "aria", "zephyr", "mentor", "classic", "eli", "ellie", "hotel eli", "agency eli", "event eli", "teach me eli", "masculine", "feminine", "ira", "eira", "zefir", "defire"):
         if matched:
             return "switch_persona", [matched.id]
             

@@ -46,8 +46,8 @@ def test_personas_attributes():
     zephyr = PERSONAS["event"]
     assert zephyr.id == "event"
     assert zephyr.name == "Zephyr"
-    assert zephyr.gender == "masculine"
-    assert "Davis" in zephyr.voice
+    assert zephyr.gender == "feminine"
+    assert "Sara" in zephyr.voice
     assert zephyr.shape == "spark"
     assert zephyr.color_accent.upper() == "#8338EC"
 

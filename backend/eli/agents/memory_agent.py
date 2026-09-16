@@ -75,8 +75,48 @@ class FastEmbedder:
         return v / n if n > 0 else v
 
 
+class OllamaEmbedder:
+    """Semantic embedder backed by local Ollama instance (e.g. nomic-embed-text, all-minilm, bge-small)."""
+    name = "ollama-embed"
+
+    def __init__(self, host: str = "http://127.0.0.1:11434", model: str = "nomic-embed-text"):
+        import requests
+        self.host = host.rstrip("/")
+        self.model = model
+        self._session = requests.Session()
+
+    def embed(self, text: str) -> np.ndarray:
+        try:
+            resp = self._session.post(
+                f"{self.host}/api/embeddings",
+                json={"model": self.model, "prompt": text},
+                timeout=3.0
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                raw_vec = data.get("embedding") or []
+                if raw_vec:
+                    vec = np.array(raw_vec, dtype=np.float32)
+                    if len(vec) != DIM:
+                        indices = np.linspace(0, len(vec) - 1, DIM).astype(int)
+                        vec = vec[indices]
+                    n = float(np.linalg.norm(vec))
+                    return vec / n if n > 0 else vec
+        except Exception:
+            pass
+        return HashEmbedder().embed(text)
+
+
 def make_embedder():
-    if os.getenv("ELI_EMBEDDER", "hash").lower() == "fastembed":
+    choice = os.getenv("ELI_EMBEDDER", "auto").lower().strip()
+    if choice in ("ollama", "local"):
+        try:
+            host = os.getenv("OLLAMA_HOST", "http://127.0.0.1:11434")
+            model = os.getenv("ELI_OLLAMA_EMBED_MODEL", "nomic-embed-text")
+            return OllamaEmbedder(host=host, model=model)
+        except Exception as e:
+            log.warning("Ollama embedder unavailable (%s); falling back to hash embedder", e)
+    elif choice == "fastembed":
         try:
             return FastEmbedder()
         except Exception as e:
@@ -862,19 +902,27 @@ class MemoryAgent:
         kb_chunks = self.search_knowledge(query, limit=3, min_score=0.2)
         kb_data = [c.as_dict() for c in kb_chunks]
 
+        def _clean(txt: str) -> bool:
+            return not any(b in txt for b in ("/9j/", "data:image", "media_type", "{'type': 'image'"))
+
         # 5. Formatted prompt string for injection
         sections = []
-        if pref_texts:
-            sections.append("User Preferences:\n" + "\n".join(f"- {p}" for p in pref_texts))
-        if solutions:
-            sections.append("Past Verified Solutions / Fixes:\n" + "\n".join(f"- {s}" for s in solutions))
-        if facts:
-            sections.append("Relevant Context & Memory:\n" + "\n".join(f"- {f}" for f in facts[:4]))
+        valid_prefs = [p for p in pref_texts if _clean(p)]
+        if valid_prefs:
+            sections.append("User Preferences:\n" + "\n".join(f"- {p}" for p in valid_prefs))
+        valid_solutions = [s for s in solutions if _clean(s)]
+        if valid_solutions:
+            sections.append("Past Verified Solutions / Fixes:\n" + "\n".join(f"- {s}" for s in valid_solutions))
+        valid_facts = [f for f in facts if _clean(f)]
+        if valid_facts:
+            sections.append("Relevant Context & Memory:\n" + "\n".join(f"- {f}" for f in valid_facts[:4]))
         if kb_chunks:
             kb_lines = []
             for c in kb_chunks:
-                kb_lines.append(f"From '{c.doc_title}' ({c.section_title}):\n{c.content[:400]}")
-            sections.append("Local Document & Code Knowledge:\n" + "\n\n".join(kb_lines))
+                if _clean(c.content):
+                    kb_lines.append(f"From '{c.doc_title}' ({c.section_title}):\n{c.content[:400]}")
+            if kb_lines:
+                sections.append("Local Document & Code Knowledge:\n" + "\n\n".join(kb_lines))
         if proj_data and proj_data.get("found"):
             proj_info = [f"Project: {proj_data.get('name')}"]
             if proj_data.get("folders"):
@@ -887,9 +935,9 @@ class MemoryAgent:
 
         formatted = "\n\n".join(sections)
         return {
-            "preferences": pref_texts,
-            "solutions": solutions,
-            "facts": facts,
+            "preferences": valid_prefs,
+            "solutions": valid_solutions,
+            "facts": valid_facts,
             "knowledge": kb_data,
             "project": proj_data,
             "formatted": formatted
@@ -899,7 +947,10 @@ class MemoryAgent:
         """Stores a verified resolution into memory with high importance so future tasks can recall it."""
         if self.private:
             return 0
+        s = str(solution_summary or "")
+        if any(b in s for b in ("/9j/", "data:image", "media_type", "{'type': 'image'")):
+            return 0
         tools_str = f" (using {', '.join(tools_used)})" if tools_used else ""
-        content = f"Solution for '{goal}': {solution_summary}{tools_str}"
+        content = f"Solution for '{goal}': {s[:200]}{tools_str}"
         return self.remember(content, kind="solution", importance=0.85)
 

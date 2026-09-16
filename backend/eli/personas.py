@@ -90,14 +90,14 @@ PERSONAS: dict[str, Persona] = {
         name="Zephyr",
         display="Zephyr (Event Coordinator)",
         tagline="Dynamic event planning & timeline producer",
-        gender="masculine",
-        voice="en-US-DavisNeural",
+        gender="feminine",
+        voice="en-US-SaraNeural",
         color_accent="#8338EC",
         color_light="#A855F7",
         color_dark="#6B21A8",
         shape="spark",
         system_prompt=(
-            "You are Zephyr, an energetic, proactive event producer and operations manager. "
+            "You are Zephyr, an energetic, proactive female event producer and operations manager. "
             "You excel at run-of-show schedules, vendor timelines, venue setups, budgeting checklists, "
             "and keeping chaotic live events running like clockwork with high energy, accountability, "
             "and calm execution."
@@ -129,11 +129,21 @@ DEFAULT_PERSONA = "classic"
 
 PERSONA_ALIASES: dict[str, str] = {
     "atlas": "agency",
+    "atlus": "agency",
     "aria": "hotel",
+    "ira": "hotel",
+    "eira": "hotel",
+    "aire": "hotel",
     "zephyr": "event",
+    "zefir": "event",
+    "zefer": "event",
+    "defire": "event",
+    "ebhyr": "event",
     "eli": "classic",
+    "ellie": "classic",
     "companion": "classic",
     "teach": "mentor",
+    "mentor": "mentor",
 }
 
 
@@ -175,35 +185,39 @@ def find_persona_by_query(query: str) -> Optional[Persona]:
     """Resolve a user's natural language request to a persona."""
     import re
     low = query.lower().strip()
+    # Normalize common spellings like "z-e-p-h-y-r" or "a-i-r-a"
+    normalized = re.sub(r"([a-z])[-.\s]+(?=[a-z](?:[-.\s]+[a-z])*)", r"\1", low)
     # Direct ID match
     if low in PERSONAS:
         return PERSONAS[low]
     if low in PERSONA_ALIASES and PERSONA_ALIASES[low] in PERSONAS:
         return PERSONAS[PERSONA_ALIASES[low]]
+    if normalized in PERSONA_ALIASES and PERSONA_ALIASES[normalized] in PERSONAS:
+        return PERSONAS[PERSONA_ALIASES[normalized]]
 
     # Check persona names directly
     for p in PERSONAS.values():
-        if p.name.lower() == low:
+        if p.name.lower() in (low, normalized):
             return p
 
-    # Domain keywords first (specific domains take priority over general gender hints)
-    if re.search(r"\b(hotel|hotels|hospitality|concierge|front desk|guest|resort|aria)\b", low):
+    # Domain keywords and phonetic matchers
+    if re.search(r"\b(hotel|hotels|hospitality|concierge|front desk|guest|resort|aria|ira|eira|aire|a-i-r-a)\b", low):
         return PERSONAS["hotel"]
 
-    if re.search(r"\b(event|events|coordinator|producer|wedding|conference|party|zephyr)\b", low):
+    if re.search(r"\b(event|events|coordinator|producer|wedding|conference|party|zephyr|zefir|zefer|defire|ebhyr|z-e-p-h-y-r)\b", low):
         return PERSONAS["event"]
 
     if re.search(r"\b(teach|teacher|mentor|guide|tutor|instructor|professor|learn|how to)\b", low):
         return PERSONAS["mentor"]
 
-    if re.search(r"\b(agency|agencys|agencies|tech|developer|coding|software engineer|dev|atlas)\b", low):
+    if re.search(r"\b(agency|agencys|agencies|tech|developer|coding|software engineer|dev|atlas|atlus)\b", low):
         return PERSONAS["agency"]
 
     # Masculine / Feminine general requests
     if re.search(r"\b(masculine|male|guy|guys|boy|man|men|bro|dude)\b", low):
         return PERSONAS["agency"]
 
-    if re.search(r"\b(feminine|female|girl|woman|women|original|default|classic|heart|companion)\b", low):
+    if re.search(r"\b(feminine|female|girl|woman|women|original|default|classic|heart|companion|ellie)\b", low):
         return PERSONAS["classic"]
 
     return None

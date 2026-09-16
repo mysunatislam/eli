@@ -152,7 +152,10 @@ class ActionVerifier:
                 suggested_action="Check arguments and permissions."
             )
 
-        return VerificationResult(passed=True, observations=res_str[:150])
+        obs = res_str
+        if any(b in obs for b in ("/9j/", "data:image", "media_type", "{'type': 'image'")):
+            obs = "[Visual Screen / Image Data]"
+        return VerificationResult(passed=True, observations=obs[:150])
 
     def verify_window_open(self, app_or_keyword: str) -> VerificationResult:
         """Verifies that an application window actually exists and is registered in the OS."""
