@@ -1,4 +1,10 @@
-<title>Eli persona lineup</title>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#090a0e">
+<title>Eli Persona Lineup · Persistent Desktop AI</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Manrope:wght@400;500;600&family=DM+Mono:wght@400;500&display=swap">
@@ -14,11 +20,13 @@
     --sans:'Manrope','Segoe UI',system-ui,sans-serif;
     --mono:'DM Mono',Consolas,monospace;
     --ease:cubic-bezier(.2,.7,.2,1);
+    --mouth-sy:1;
     transition:--active .7s var(--ease),--active-l .7s var(--ease);
   }
   @property --angle{ syntax:'<angle>'; inherits:false; initial-value:0deg; }
   @property --active{ syntax:'<color>'; inherits:true; initial-value:#f0567a; }
   @property --active-l{ syntax:'<color>'; inherits:true; initial-value:#fb9db4; }
+  @property --mouth-sy{ syntax:'<number>'; inherits:true; initial-value:1; }
   html{ scroll-behavior:smooth; }
   *{ box-sizing:border-box; }
   body{ background:var(--ink-0); color:var(--text-1); font-family:var(--sans); font-size:15px; line-height:1.6; -webkit-font-smoothing:antialiased; overflow-x:hidden; }
@@ -34,23 +42,29 @@
   /* ================= CRYSTAL & LIQUID GLASS MATERIAL ================= */
   .glass{
     position:absolute; inset:0; border-radius:inherit; overflow:hidden;
-    background: linear-gradient(145deg, rgba(255,255,255,.095) 0%, rgba(255,255,255,.025) 55%, rgba(255,255,255,.008) 100%);
+    background: linear-gradient(145deg, rgba(255,255,255,.11) 0%, rgba(255,255,255,.03) 55%, rgba(255,255,255,.01) 100%);
     backdrop-filter: blur(24px) saturate(180%) brightness(1.08);
     -webkit-backdrop-filter: blur(24px) saturate(180%) brightness(1.08);
-    border: 1px solid rgba(255,255,255,.14);
-    box-shadow: inset 0 1.2px 1.5px 0 rgba(255,255,255,.38), inset 0 -1.2px 1.5px 0 rgba(0,0,0,.35), 0 24px 54px -16px rgba(0,0,0,.55);
+    border: 1px solid rgba(255,255,255,.18);
+    box-shadow: inset 0 1.5px 2px 0 rgba(255,255,255,.45), inset 0 -1.5px 2px 0 rgba(0,0,0,.35), 0 24px 54px -16px rgba(0,0,0,.6);
   }
   .glass::before{
     content:''; position:absolute; inset:0; border-radius:inherit; padding:1px;
-    background: conic-gradient(from var(--angle, 0deg), rgba(255,255,255,.65) 0deg, rgba(255,160,200,.35) 45deg, transparent 110deg, rgba(120,210,255,.35) 175deg, transparent 240deg, var(--accent, var(--champagne)) 300deg, rgba(255,255,255,.65) 360deg);
+    background: conic-gradient(from var(--angle, 0deg), rgba(255,255,255,.7) 0deg, rgba(255,160,200,.4) 45deg, transparent 110deg, rgba(120,210,255,.4) 175deg, transparent 240deg, var(--accent, var(--champagne)) 300deg, rgba(255,255,255,.7) 360deg);
     -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
     -webkit-mask-composite: xor; mask-composite: exclude;
-    opacity: .48; pointer-events: none;
+    opacity: .55; pointer-events: none;
+  }
+  /* Curved Specular Glare Arc on all glass surfaces */
+  .glass::after{
+    content:''; position:absolute; inset:0; border-radius:inherit; pointer-events:none;
+    background: radial-gradient(ellipse 130% 65% at 50% -8%, rgba(255,255,255,.45) 0%, rgba(255,255,255,.1) 36%, transparent 68%);
+    opacity: .85; mix-blend-mode: screen;
   }
   .glass.spin::before{ animation: sheen 8.5s linear infinite; }
   @keyframes sheen{ to{ --angle:360deg; } }
-  .glare{ position:absolute; inset:0; background:radial-gradient(380px circle at var(--mx,50%) var(--my,50%), rgba(255,255,255,.2), transparent 55%); opacity:0; transition:opacity .35s; pointer-events:none; }
-  .spot{ position:absolute; inset:0; background:radial-gradient(340px circle at var(--mx,50%) var(--my,50%), color-mix(in srgb,var(--accent,var(--champagne)) 25%, transparent), transparent 60%); opacity:0; transition:opacity .35s; pointer-events:none; }
+  .glare{ position:absolute; inset:0; background:radial-gradient(380px circle at var(--mx,50%) var(--my,50%), rgba(255,255,255,.24), transparent 55%); opacity:0; transition:opacity .35s; pointer-events:none; }
+  .spot{ position:absolute; inset:0; background:radial-gradient(340px circle at var(--mx,50%) var(--my,50%), color-mix(in srgb,var(--accent,var(--champagne)) 28%, transparent), transparent 60%); opacity:0; transition:opacity .35s; pointer-events:none; }
   .tilting .glare,.tilting .spot{ opacity:1; }
   .halo{ position:absolute; top:-45%; left:50%; width:200%; height:200%; transform:translateX(-50%); background:radial-gradient(circle at 50% 0%,var(--accent) 0%,transparent 52%); opacity:.15; pointer-events:none; }
   .tilt{ position:relative; transform-style:preserve-3d; transform:perspective(1000px) rotateX(var(--rx,0deg)) rotateY(var(--ry,0deg)); transition:transform .6s var(--ease); }
@@ -94,7 +108,7 @@
   .stage{
     position:relative; aspect-ratio:1/1; max-height:580px; width:100%; border-radius:32px;
     perspective: 1200px; -webkit-perspective: 1200px;
-    overflow: hidden; user-select: none;
+    overflow: hidden; user-select: none; touch-action: pan-y;
     background: radial-gradient(circle at 50% 48%, rgba(255,255,255,.03) 0%, transparent 72%), var(--ink-1);
     border: 1px solid rgba(255,255,255,.12);
     box-shadow: 0 30px 70px -20px rgba(0,0,0,.7), inset 0 1px 1px rgba(255,255,255,.2);
@@ -109,7 +123,7 @@
     transform-style:preserve-3d;
     transform: rotateX(var(--stage-rx, -8deg)) rotateY(var(--stage-ry, 0deg));
     transition: transform .25s ease-out;
-    cursor: grab; z-index: 2;
+    cursor: grab; z-index: 2; touch-action: pan-y;
   }
   .stage-scene.grabbing{ cursor: grabbing; }
 
@@ -120,7 +134,10 @@
     background: radial-gradient(circle, rgba(255,255,255,.09) 0%, rgba(255,255,255,.015) 55%, transparent 72%);
     border: 1.5px solid rgba(255,255,255,.16);
     box-shadow: 0 0 60px color-mix(in srgb, var(--active) 35%, transparent), inset 0 0 40px rgba(255,255,255,.1);
-    pointer-events: none;
+    pointer-events: none; transition: box-shadow .5s ease;
+  }
+  .stage.speaking .stage-floor{
+    box-shadow: 0 0 95px color-mix(in srgb, var(--active) 75%, transparent), inset 0 0 50px rgba(255,255,255,.3);
   }
   .stage-floor-rings{
     position: absolute; inset: 10%; border-radius: 50%;
@@ -131,11 +148,20 @@
     content: ''; position: absolute; inset: 16%; border-radius: 50%;
     border: 1.5px solid color-mix(in srgb, var(--active) 50%, rgba(255,255,255,.3));
     box-shadow: 0 0 24px color-mix(in srgb, var(--active) 50%, transparent);
+    transition: all .5s ease;
+  }
+  .stage.speaking .stage-floor-rings::before{
+    border-color: var(--active-l);
+    box-shadow: 0 0 45px var(--active);
   }
   .stage-floor-beam{
     position: absolute; inset: 0; border-radius: 50%;
     background: conic-gradient(from var(--beam-angle, 0deg), transparent 0deg, color-mix(in srgb, var(--active) 32%, transparent) 40deg, transparent 80deg);
     filter: blur(8px); animation: spinPedestal 18s linear infinite; opacity: .7;
+    transition: opacity .5s ease;
+  }
+  .stage.speaking .stage-floor-beam{
+    opacity: 1; filter: blur(4px); animation-duration: 5s;
   }
   @keyframes spinPedestal{ to{ transform: rotate(360deg); } }
 
@@ -171,18 +197,24 @@
     transform-style: preserve-3d;
     transform: rotateY(calc(-1 * (var(--rot-y, 0deg) + var(--angle)) * 0.8));
     transition: transform .3s ease-out, box-shadow .4s, border-color .4s;
-    background: linear-gradient(150deg, rgba(255,255,255,.15) 0%, rgba(255,255,255,.03) 65%);
-    backdrop-filter: blur(18px) saturate(160%);
-    -webkit-backdrop-filter: blur(18px) saturate(160%);
-    border: 1px solid rgba(255,255,255,.22);
-    box-shadow: 0 20px 42px -10px rgba(0,0,0,.65), inset 0 1px 1.5px rgba(255,255,255,.5), inset 0 -1px 2px rgba(0,0,0,.35);
+    background: linear-gradient(155deg, rgba(255,255,255,.18) 0%, rgba(255,255,255,.04) 55%, rgba(255,255,255,.015) 100%);
+    backdrop-filter: blur(20px) saturate(180%) brightness(1.1);
+    -webkit-backdrop-filter: blur(20px) saturate(180%) brightness(1.1);
+    border: 1.5px solid rgba(255,255,255,.26);
+    box-shadow: 0 22px 50px -10px rgba(0,0,0,.7), inset 0 1.5px 2px rgba(255,255,255,.6), inset 0 -1.5px 2px rgba(0,0,0,.45), 0 0 26px -6px color-mix(in srgb, var(--c) 40%, transparent);
     display: flex; flex-direction: column; align-items: center; justify-content: center;
     padding: 14px 10px;
+    overflow: hidden;
   }
   .p3d-card::before{
     content: ''; position: absolute; inset: 0; border-radius: inherit;
     background: radial-gradient(circle at 50% 20%, color-mix(in srgb, var(--c) 32%, transparent), transparent 70%);
     opacity: .55; pointer-events: none;
+  }
+  .p3d-card::after{
+    content: ''; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
+    background: radial-gradient(ellipse 120% 60% at 50% -10%, rgba(255,255,255,.5) 0%, rgba(255,255,255,.12) 34%, transparent 65%);
+    mix-blend-mode: screen; opacity: .88;
   }
   .p3d-card:hover{
     border-color: color-mix(in srgb, var(--c) 65%, rgba(255,255,255,.6));
@@ -209,7 +241,7 @@
 
   /* Pill Label inside 3D Card */
   .p3d-label{
-    margin-top: 10px; font: 600 12.5px/1 var(--sans);
+    margin-top: 8px; font: 600 12.5px/1 var(--sans);
     color: var(--text-1); letter-spacing: .02em;
     display: flex; flex-direction: column; align-items: center; gap: 3px;
     transform: translateZ(22px);
@@ -219,6 +251,68 @@
     font: 500 10px var(--mono); color: var(--text-3); letter-spacing: .08em; text-transform: uppercase;
   }
   .p3d.sel .p3d-label small{ color: var(--c-l); }
+
+  /* Mini Direct Voice Pill in 3D Card */
+  .p3d-voice-btn{
+    margin-top: 6px; display: inline-flex; align-items: center; gap: 5px;
+    padding: 4px 11px; border-radius: 100px;
+    font: 600 10.5px/1 var(--sans); color: var(--text-1);
+    background: rgba(255,255,255,.1); border: 1px solid rgba(255,255,255,.25);
+    backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+    cursor: pointer; transform: translateZ(26px);
+    transition: all .25s var(--ease);
+    box-shadow: 0 4px 12px rgba(0,0,0,.35);
+  }
+  .p3d-voice-btn:hover{
+    background: color-mix(in srgb, var(--c) 45%, rgba(255,255,255,.2));
+    border-color: color-mix(in srgb, var(--c) 80%, rgba(255,255,255,.6));
+    transform: translateZ(30px) scale(1.06);
+    box-shadow: 0 6px 18px -2px var(--c);
+  }
+  .p3d.speaking .p3d-voice-btn{
+    background: var(--c); color: #fff; border-color: #fff;
+    box-shadow: 0 0 18px var(--c);
+  }
+
+  /* Multi-ring Vocal Illumination Aura */
+  .voice-aura{
+    position: absolute; inset: -24px; border-radius: 36px; pointer-events: none;
+    opacity: 0; transform: translateZ(-6px); transition: opacity .4s ease;
+    display: flex; align-items: center; justify-content: center; z-index: -1;
+  }
+  .p3d.speaking .voice-aura, .card.speaking .voice-aura{
+    opacity: 1;
+  }
+  .aura-glow{
+    position: absolute; inset: 0; border-radius: inherit;
+    background: radial-gradient(circle, color-mix(in srgb, var(--c, var(--active)) 70%, transparent) 0%, transparent 70%);
+    filter: blur(20px);
+    animation: voiceGlowPulse 1.4s ease-in-out infinite alternate;
+  }
+  .aura-ring{
+    position: absolute; inset: 0; border-radius: inherit;
+    border: 2px solid var(--c, var(--active));
+    box-shadow: 0 0 25px var(--c, var(--active)), inset 0 0 15px var(--c, var(--active));
+    opacity: 0;
+  }
+  .p3d.speaking .ring-1, .card.speaking .ring-1{
+    animation: voiceRingExpand 2s cubic-bezier(0.1, 0.8, 0.2, 1) infinite;
+  }
+  .p3d.speaking .ring-2, .card.speaking .ring-2{
+    animation: voiceRingExpand 2s cubic-bezier(0.1, 0.8, 0.2, 1) 0.6s infinite;
+  }
+  .p3d.speaking .ring-3, .card.speaking .ring-3{
+    animation: voiceRingExpand 2s cubic-bezier(0.1, 0.8, 0.2, 1) 1.2s infinite;
+  }
+  @keyframes voiceRingExpand{
+    0%{ transform: scale(0.85); opacity: 0.9; }
+    60%{ opacity: 0.5; }
+    100%{ transform: scale(1.75); opacity: 0; }
+  }
+  @keyframes voiceGlowPulse{
+    0%{ transform: scale(0.95); opacity: 0.4; }
+    100%{ transform: scale(1.15); opacity: 0.9; }
+  }
 
   /* Projected Shadow on Pedestal */
   .p3d-shadow{
@@ -262,6 +356,79 @@
   }
   .stage-btn .dot{ width: 6px; height: 6px; border-radius: 50%; background: var(--active); box-shadow: 0 0 6px var(--active); }
   .stage-btn.paused .dot{ background: var(--text-3); box-shadow: none; }
+
+  /* Holographic Floating Stage Voice HUD */
+  .voice-hud{
+    position: absolute; bottom: 18px; left: 50%; transform: translateX(-50%) translateY(24px);
+    display: flex; align-items: center; gap: 12px;
+    padding: 8px 16px; border-radius: 100px;
+    background: rgba(15, 17, 23, 0.85);
+    backdrop-filter: blur(20px) saturate(180%);
+    -webkit-backdrop-filter: blur(20px) saturate(180%);
+    border: 1px solid rgba(255,255,255,0.22);
+    box-shadow: 0 16px 36px -8px rgba(0,0,0,0.7), 0 0 24px color-mix(in srgb, var(--active) 40%, transparent);
+    opacity: 0; pointer-events: none;
+    transition: transform .35s var(--ease), opacity .35s var(--ease), border-color .35s;
+    z-index: 10;
+  }
+  .voice-hud.active{
+    opacity: 1; pointer-events: auto; transform: translateX(-50%) translateY(0);
+  }
+  .hud-live-badge{
+    display: flex; align-items: center; gap: 6px;
+    font: 600 10px/1 var(--mono); letter-spacing: .12em; text-transform: uppercase;
+    color: var(--active-l);
+  }
+  .hud-dot{
+    width: 7px; height: 7px; border-radius: 50%; background: var(--active);
+    box-shadow: 0 0 8px var(--active);
+    animation: pulse 1.2s infinite;
+  }
+  .hud-persona-name{
+    font: italic 15px/1 var(--serif); color: var(--text-1); white-space: nowrap;
+  }
+  .hud-bars{
+    display: flex; align-items: flex-end; gap: 3px; height: 16px;
+  }
+  .hud-bars span{
+    width: 3px; border-radius: 2px; background: var(--active-l);
+    height: 30%;
+  }
+  .voice-hud.active .hud-bars span{
+    animation: hudEqualizer 0.75s ease-in-out infinite alternate;
+  }
+  .voice-hud.active .hud-bars span:nth-child(1){ animation-delay: -0.1s; }
+  .voice-hud.active .hud-bars span:nth-child(2){ animation-delay: -0.4s; }
+  .voice-hud.active .hud-bars span:nth-child(3){ animation-delay: -0.2s; }
+  .voice-hud.active .hud-bars span:nth-child(4){ animation-delay: -0.6s; }
+  .voice-hud.active .hud-bars span:nth-child(5){ animation-delay: -0.15s; }
+  .voice-hud.active .hud-bars span:nth-child(6){ animation-delay: -0.5s; }
+  .voice-hud.active .hud-bars span:nth-child(7){ animation-delay: -0.3s; }
+  .voice-hud.active .hud-bars span:nth-child(8){ animation-delay: -0.7s; }
+  .voice-hud.active .hud-bars span:nth-child(9){ animation-delay: -0.25s; }
+  .voice-hud.active .hud-bars span:nth-child(10){ animation-delay: -0.45s; }
+  @keyframes hudEqualizer{
+    0%{ height: 20%; }
+    50%{ height: 100%; }
+    100%{ height: 35%; }
+  }
+  .hud-stop-btn{
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 4px 10px; border-radius: 100px;
+    font: 500 10.5px var(--mono); color: var(--text-2);
+    background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.15);
+    cursor: pointer; transition: all .2s;
+  }
+  .hud-stop-btn:hover{
+    background: rgba(255,255,255,0.18); color: var(--text-1);
+  }
+
+  /* Talking Mouth Cadence */
+  .eli-mouth{
+    transform-origin: 50px 62px;
+    transform: scaleY(var(--mouth-sy, 1));
+    transition: transform 0.05s linear;
+  }
 
   /* Audio Spectrum Soundwave for Voice Preview */
   .soundwave{
@@ -416,32 +583,100 @@
   .toast{ position:fixed; left:50%; bottom:calc(20px + env(safe-area-inset-bottom,0px)); transform:translateX(-50%) translateY(20px); background:var(--ink-3); color:var(--text-1); padding:10px 16px; border-radius:100px; font-size:13px; border:1px solid var(--line); opacity:0; transition:opacity .3s,transform .3s; z-index:80; pointer-events:none; }
   .toast.show{ opacity:1; transform:translateX(-50%); }
 
-  @media (max-width:980px){
-    .hero-grid{ grid-template-columns:1fr; }
-    .stage{ order:-1; aspect-ratio:auto; height:430px; max-width:560px; margin:0 auto; --radius:185px; }
-    .p3d{ width:128px; height:172px; left:-64px; top:-94px; }
-    .p3d-av{ width:80px; height:80px; }
-    .stage-floor{ width:380px; height:380px; }
-    .dock{ grid-template-columns:1fr; }
-    .dock-tabs{ border-right:0; border-bottom:1px solid var(--line-soft); grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); }
-    .pgrid,.igrid{ grid-template-columns:repeat(4,minmax(0,1fr)); }
-    .pgrid > :nth-child(4),.igrid > :nth-child(4){ grid-column:span 2; }
-    .pgrid > :nth-child(5),.igrid > :nth-child(5){ grid-column:2 / span 2; }
-    .tile,.tile.w{ grid-column:span 6; }
-    .privacy{ grid-template-columns:1fr; }
-    .metrics{ grid-template-columns:repeat(2,1fr); }
+  /* Table and Diagram Touch Scrolling Wrappers */
+  .table-wrap{
+    width:100%; overflow-x:auto; -webkit-overflow-scrolling:touch;
+    border-radius:20px;
   }
-  @media (max-width:760px){ .nav-links{ display:none; } .stats{ grid-template-columns:repeat(2,auto); } .section{ padding-block:80px; } }
-  @media (max-width:620px){
-    .pgrid,.igrid{ grid-template-columns:1fr; }
-    .pgrid > *,.igrid > *{ grid-column:auto !important; }
-    .tile,.tile.w{ grid-column:span 12; }
-    .stage{ height:370px; --radius:145px; }
-    .p3d{ width:108px; height:152px; left:-54px; top:-82px; }
-    .p3d-av{ width:66px; height:66px; }
-    .stage-floor{ width:300px; height:300px; }
-    .dock-tabs{ grid-template-columns:1fr 1fr; }
+  .table-wrap::-webkit-scrollbar, .diagram-wrap::-webkit-scrollbar{ height:6px; }
+  .table-wrap::-webkit-scrollbar-thumb, .diagram-wrap::-webkit-scrollbar-thumb{ background:rgba(255,255,255,.18); border-radius:3px; }
+  .diagram-wrap{ width:100%; overflow-x:auto; -webkit-overflow-scrolling:touch; }
+
+  @media (max-width:980px){
+    .hero-grid{ grid-template-columns:1fr; gap:32px; }
+    .stage{ order:-1; aspect-ratio:auto; height:420px; max-width:540px; margin:0 auto; --radius:175px; }
+    .p3d{ width:122px; height:168px; left:-61px; top:-90px; }
+    .p3d-av{ width:76px; height:76px; }
+    .stage-floor{ width:360px; height:360px; }
+    .dock{ grid-template-columns:1fr; margin-top:24px; border-radius:24px; }
+    .dock-tabs{
+      border-right:0; border-bottom:1px solid var(--line-soft);
+      display:flex; flex-direction:row; overflow-x:auto;
+      scroll-snap-type:x mandatory; -webkit-overflow-scrolling:touch;
+      scrollbar-width:none; padding:12px; gap:8px;
+    }
+    .dock-tabs::-webkit-scrollbar{ display:none; }
+    .chip{
+      flex:0 0 auto; scroll-snap-align:center;
+      padding:8px 14px; border-radius:100px;
+      font-size:13px; gap:10px;
+    }
+    .chip .av{ width:28px; height:28px; }
     .chip small{ display:none; }
+    .dock-detail{ padding:22px 20px; }
+    .pgrid, .igrid{ grid-template-columns:repeat(2,1fr); gap:16px; }
+    .pgrid > *, .igrid > *{ grid-column:span 1 !important; }
+    .pgrid > :nth-child(5){ grid-column:span 2 !important; max-width:480px; margin-inline:auto; width:100%; }
+    .tile, .tile.w{ grid-column:span 6; }
+    .privacy{ grid-template-columns:1fr; gap:32px; }
+    .metrics{ grid-template-columns:repeat(2,1fr); gap:14px; }
+  }
+  @media (max-width:760px){
+    .nav{ padding:8px 0; }
+    .nav-bar{ padding:8px 14px; gap:12px; justify-content:space-between; }
+    .nav-links{ display:none; }
+    .brand{ font-size:22px; }
+    .brand svg{ width:22px; height:22px; }
+    .nav-bar .btn.sm{ padding:7px 14px; font-size:12.5px; }
+    .stats{ grid-template-columns:repeat(2,1fr); gap:16px 14px; }
+    .section{ padding-block:72px; }
+  }
+  @media (max-width:640px){
+    .wrap{ padding-inline:16px; }
+    .hero{ padding-block:24px 20px; }
+    .eyebrow{ font-size:11px; letter-spacing:.12em; }
+    h1{ font-size:clamp(30px, 8.5vw, 44px); margin:12px 0 16px; line-height:1.05; }
+    .lede{ font-size:15px; line-height:1.55; }
+    .cta-row{ margin-top:20px; gap:10px; }
+    .cta-row .btn{ width:100%; justify-content:center; }
+    .stats{ margin-top:28px; }
+    .stats dt{ font-size:10px; }
+    .stats dd{ font-size:26px; }
+
+    /* Stage Mobile Dimensions */
+    .stage{ height:350px; --radius:122px; border-radius:24px; }
+    .p3d{ width:96px; height:136px; left:-48px; top:-72px; }
+    .p3d-card{ border-radius:20px; padding:10px 6px; }
+    .p3d-av{ width:58px; height:58px; }
+    .p3d-label{ margin-top:6px; font-size:11px; }
+    .p3d-label small{ font-size:9px; }
+    .p3d-voice-btn{ padding:3px 8px; font-size:9.5px; margin-top:4px; }
+    .stage-floor{ width:260px; height:260px; }
+    .stage-caption{ left:14px; bottom:12px; }
+    .stage-caption b{ font-size:20px; }
+    .stage-caption span{ font-size:9.5px; }
+    .stage-hint{ display:none; }
+    .stage-controls{ top:12px; right:12px; gap:6px; }
+    .stage-btn{ padding:6px 10px; font-size:10.5px; }
+    .voice-hud{ bottom:10px; padding:6px 12px; gap:8px; max-width:calc(100% - 24px); }
+    .hud-persona-name{ font-size:13px; }
+    .hud-live-badge{ font-size:9px; }
+
+    /* Grid Cards Mobile */
+    .pgrid, .igrid{ grid-template-columns:1fr; gap:16px; }
+    .pgrid > *, .igrid > *{ grid-column:span 1 !important; max-width:none !important; }
+    .card > .body{ padding:22px 18px 18px; }
+    .card .avatar{ width:100px; height:100px; margin-bottom:12px; }
+    .card .avatar .av{ width:84px; height:84px; }
+    .card h3{ font-size:26px; }
+    .tile, .tile.w{ grid-column:span 12; }
+    .tile > .body{ padding:20px 18px; min-height:180px; }
+    .metrics{ grid-template-columns:1fr; }
+    .metric > .body{ padding:18px; }
+    .metric dd{ font-size:32px; }
+    .cta > .body{ padding:48px 18px; }
+    .cta h2{ font-size:32px; }
+    footer{ flex-direction:column; text-align:center; gap:10px; padding:28px 0; }
   }
   @media (prefers-reduced-motion:reduce){
     html{ scroll-behavior:auto; }
@@ -450,6 +685,8 @@
     .tilt{ transition:none; }
   }
 </style>
+</head>
+<body>
 
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
   <defs>
@@ -544,7 +781,7 @@
       <ellipse cx="75" cy="58" rx="5.5" ry="3" fill="#ff4d79" opacity="0.55"/>
 
       <!-- Sweet Happy Open Smile -->
-      <path d="M42,60 Q50,71 58,60" stroke="#1b1222" stroke-width="3.2" fill="none" stroke-linecap="round"/>
+      <path class="eli-mouth" d="M42,60 Q50,71 58,60" stroke="#1b1222" stroke-width="3.2" fill="none" stroke-linecap="round"/>
     </symbol>
 
     <!-- 2. ATLAS (Masculine Tech Lead & Architecture) -->
@@ -588,7 +825,7 @@
       </g>
 
       <!-- Confident Determined Smirk -->
-      <path d="M42,65 Q50,68 59,64" stroke="#0a1a36" stroke-width="3.2" fill="none" stroke-linecap="round"/>
+      <path class="eli-mouth" d="M42,65 Q50,68 59,64" stroke="#0a1a36" stroke-width="3.2" fill="none" stroke-linecap="round"/>
     </symbol>
 
     <!-- 3. ARIA (Refined Feminine Hospitality Concierge) -->
@@ -634,7 +871,7 @@
       <ellipse cx="74" cy="58" rx="5" ry="2.8" fill="#d98236" opacity="0.45"/>
 
       <!-- Warm Gracious Welcoming Smile -->
-      <path d="M41,61 Q50,71 59,61" stroke="#2d1a08" stroke-width="2.8" fill="none" stroke-linecap="round"/>
+      <path class="eli-mouth" d="M41,61 Q50,71 59,61" stroke="#2d1a08" stroke-width="2.8" fill="none" stroke-linecap="round"/>
     </symbol>
 
     <!-- 4. ZEPHYR (Female Dynamic Event Producer & Operations) -->
@@ -683,7 +920,7 @@
       <ellipse cx="73" cy="57" rx="4.8" ry="2.6" fill="#e040fb" opacity="0.5"/>
 
       <!-- High-Energy Bright Smile -->
-      <path d="M40,59 Q50,71 60,59" stroke="#1d0a33" stroke-width="3.2" fill="none" stroke-linecap="round"/>
+      <path class="eli-mouth" d="M40,59 Q50,71 60,59" stroke="#1d0a33" stroke-width="3.2" fill="none" stroke-linecap="round"/>
     </symbol>
 
     <!-- 5. MENTOR (Instructional Guide & Procedural Tutor) -->
@@ -736,7 +973,7 @@
       <ellipse cx="74" cy="58" rx="5" ry="2.6" fill="#14b8a6" opacity="0.45"/>
 
       <!-- Patient Reassuring Pedagogical Smile -->
-      <path d="M39,61 Q50,72 61,61" stroke="#092824" stroke-width="3" fill="none" stroke-linecap="round"/>
+      <path class="eli-mouth" d="M39,61 Q50,72 61,61" stroke="#092824" stroke-width="3" fill="none" stroke-linecap="round"/>
     </symbol>
   </defs>
 </svg>
@@ -783,8 +1020,18 @@
           <!-- 0: Eli Classic -->
           <div class="p3d sel" data-i="0" style="--i:0; --c:var(--eli); --c-l:var(--eli-l); --angle:0deg; --delay:0.08s;" title="Select Eli Classic">
             <div class="p3d-card">
+              <div class="voice-aura" aria-hidden="true">
+                <div class="aura-glow"></div>
+                <div class="aura-ring ring-1"></div>
+                <div class="aura-ring ring-2"></div>
+                <div class="aura-ring ring-3"></div>
+              </div>
               <svg class="p3d-av" viewBox="0 0 100 100" aria-hidden="true"><use href="#av-eli"/></svg>
               <div class="p3d-label"><b>Eli Classic</b><small>Companion</small></div>
+              <button class="p3d-voice-btn" type="button" data-voice="eli" title="Listen to Eli's voice">
+                <svg viewBox="0 0 24 24" width="11" height="11" fill="currentColor"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3zm5 6a1 1 0 0 0-2 0 5 5 0 0 1-10 0 1 1 0 1 0-2 0 7 7 0 0 0 6 6.92V18H7a1 1 0 0 0 0 2h10a1 1 0 0 0 0-2h-2v-3.08A7 7 0 0 0 17 8z"/></svg>
+                <span>Voice</span>
+              </button>
             </div>
             <div class="p3d-shadow"></div>
           </div>
@@ -792,8 +1039,18 @@
           <!-- 1: Atlas -->
           <div class="p3d" data-i="1" style="--i:1; --c:var(--atlas); --c-l:var(--atlas-l); --angle:72deg; --delay:0.38s;" title="Select Atlas">
             <div class="p3d-card">
+              <div class="voice-aura" aria-hidden="true">
+                <div class="aura-glow"></div>
+                <div class="aura-ring ring-1"></div>
+                <div class="aura-ring ring-2"></div>
+                <div class="aura-ring ring-3"></div>
+              </div>
               <svg class="p3d-av" viewBox="0 0 100 100" aria-hidden="true"><use href="#av-atlas"/></svg>
               <div class="p3d-label"><b>Atlas</b><small>Tech Lead</small></div>
+              <button class="p3d-voice-btn" type="button" data-voice="atlas" title="Listen to Atlas's voice">
+                <svg viewBox="0 0 24 24" width="11" height="11" fill="currentColor"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3zm5 6a1 1 0 0 0-2 0 5 5 0 0 1-10 0 1 1 0 1 0-2 0 7 7 0 0 0 6 6.92V18H7a1 1 0 0 0 0 2h10a1 1 0 0 0 0-2h-2v-3.08A7 7 0 0 0 17 8z"/></svg>
+                <span>Voice</span>
+              </button>
             </div>
             <div class="p3d-shadow"></div>
           </div>
@@ -801,8 +1058,18 @@
           <!-- 2: Aria -->
           <div class="p3d" data-i="2" style="--i:2; --c:var(--aria); --c-l:var(--aria-l); --angle:144deg; --delay:0.68s;" title="Select Aria">
             <div class="p3d-card">
+              <div class="voice-aura" aria-hidden="true">
+                <div class="aura-glow"></div>
+                <div class="aura-ring ring-1"></div>
+                <div class="aura-ring ring-2"></div>
+                <div class="aura-ring ring-3"></div>
+              </div>
               <svg class="p3d-av" viewBox="0 0 100 100" aria-hidden="true"><use href="#av-aria"/></svg>
               <div class="p3d-label"><b>Aria</b><small>Concierge</small></div>
+              <button class="p3d-voice-btn" type="button" data-voice="aria" title="Listen to Aria's voice">
+                <svg viewBox="0 0 24 24" width="11" height="11" fill="currentColor"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3zm5 6a1 1 0 0 0-2 0 5 5 0 0 1-10 0 1 1 0 1 0-2 0 7 7 0 0 0 6 6.92V18H7a1 1 0 0 0 0 2h10a1 1 0 0 0 0-2h-2v-3.08A7 7 0 0 0 17 8z"/></svg>
+                <span>Voice</span>
+              </button>
             </div>
             <div class="p3d-shadow"></div>
           </div>
@@ -810,8 +1077,18 @@
           <!-- 3: Zephyr -->
           <div class="p3d" data-i="3" style="--i:3; --c:var(--zephyr); --c-l:var(--zephyr-l); --angle:216deg; --delay:0.98s;" title="Select Zephyr">
             <div class="p3d-card">
+              <div class="voice-aura" aria-hidden="true">
+                <div class="aura-glow"></div>
+                <div class="aura-ring ring-1"></div>
+                <div class="aura-ring ring-2"></div>
+                <div class="aura-ring ring-3"></div>
+              </div>
               <svg class="p3d-av" viewBox="0 0 100 100" aria-hidden="true"><use href="#av-zephyr"/></svg>
               <div class="p3d-label"><b>Zephyr</b><small>Producer</small></div>
+              <button class="p3d-voice-btn" type="button" data-voice="zephyr" title="Listen to Zephyr's voice">
+                <svg viewBox="0 0 24 24" width="11" height="11" fill="currentColor"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3zm5 6a1 1 0 0 0-2 0 5 5 0 0 1-10 0 1 1 0 1 0-2 0 7 7 0 0 0 6 6.92V18H7a1 1 0 0 0 0 2h10a1 1 0 0 0 0-2h-2v-3.08A7 7 0 0 0 17 8z"/></svg>
+                <span>Voice</span>
+              </button>
             </div>
             <div class="p3d-shadow"></div>
           </div>
@@ -819,8 +1096,18 @@
           <!-- 4: Mentor -->
           <div class="p3d" data-i="4" style="--i:4; --c:var(--mentor); --c-l:var(--mentor-l); --angle:288deg; --delay:1.28s;" title="Select Mentor">
             <div class="p3d-card">
+              <div class="voice-aura" aria-hidden="true">
+                <div class="aura-glow"></div>
+                <div class="aura-ring ring-1"></div>
+                <div class="aura-ring ring-2"></div>
+                <div class="aura-ring ring-3"></div>
+              </div>
               <svg class="p3d-av" viewBox="0 0 100 100" aria-hidden="true"><use href="#av-mentor"/></svg>
               <div class="p3d-label"><b>Mentor</b><small>Guide</small></div>
+              <button class="p3d-voice-btn" type="button" data-voice="mentor" title="Listen to Mentor's voice">
+                <svg viewBox="0 0 24 24" width="11" height="11" fill="currentColor"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3zm5 6a1 1 0 0 0-2 0 5 5 0 0 1-10 0 1 1 0 1 0-2 0 7 7 0 0 0 6 6.92V18H7a1 1 0 0 0 0 2h10a1 1 0 0 0 0-2h-2v-3.08A7 7 0 0 0 17 8z"/></svg>
+                <span>Voice</span>
+              </button>
             </div>
             <div class="p3d-shadow"></div>
           </div>
@@ -843,6 +1130,19 @@
         <button class="stage-btn" id="btnToggleSpin" type="button" title="Toggle 3D auto-rotation">
           <span class="dot"></span>
           <span id="txtSpin">Rotating</span>
+        </button>
+      </div>
+
+      <!-- Floating Holographic Voice HUD -->
+      <div class="voice-hud" id="voiceHud" aria-live="polite">
+        <div class="hud-live-badge"><span class="hud-dot"></span><span id="hudStatus">ILLUMINATION VOICE</span></div>
+        <div class="hud-persona-name" id="hudName">Eli Classic</div>
+        <div class="hud-bars" id="hudBars" aria-hidden="true">
+          <span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span>
+        </div>
+        <button class="hud-stop-btn" id="hudStopBtn" type="button" title="Stop speech">
+          <svg viewBox="0 0 24 24" width="10" height="10" fill="currentColor"><rect x="5" y="5" width="14" height="14" rx="2"/></svg>
+          <span>Stop</span>
         </button>
       </div>
 
@@ -886,6 +1186,7 @@
 
   <div class="pgrid">
     <article class="card tilt" id="p-eli" style="--accent:var(--eli); --accent-l:var(--eli-l)"><div class="glass spin"></div><div class="glare"></div><div class="spot"></div><div class="halo" style="--accent:var(--eli)"></div>
+      <div class="voice-aura" aria-hidden="true"><div class="aura-glow"></div><div class="aura-ring ring-1"></div><div class="aura-ring ring-2"></div><div class="aura-ring ring-3"></div></div>
       <div class="body">
         <div class="avatar"><svg class="av" viewBox="0 0 100 100"><use href="#av-eli"/></svg></div>
         <h3>Eli Classic</h3>
@@ -903,6 +1204,7 @@
     </article>
 
     <article class="card tilt" id="p-atlas" style="--accent:var(--atlas); --accent-l:var(--atlas-l)"><div class="glass spin"></div><div class="glare"></div><div class="spot"></div><div class="halo" style="--accent:var(--atlas)"></div>
+      <div class="voice-aura" aria-hidden="true"><div class="aura-glow"></div><div class="aura-ring ring-1"></div><div class="aura-ring ring-2"></div><div class="aura-ring ring-3"></div></div>
       <div class="body">
         <div class="avatar"><svg class="av" viewBox="0 0 100 100"><use href="#av-atlas"/></svg></div>
         <h3>Atlas</h3>
@@ -920,6 +1222,7 @@
     </article>
 
     <article class="card tilt" id="p-aria" style="--accent:var(--aria); --accent-l:var(--aria-l)"><div class="glass spin"></div><div class="glare"></div><div class="spot"></div><div class="halo" style="--accent:var(--aria)"></div>
+      <div class="voice-aura" aria-hidden="true"><div class="aura-glow"></div><div class="aura-ring ring-1"></div><div class="aura-ring ring-2"></div><div class="aura-ring ring-3"></div></div>
       <div class="body">
         <div class="avatar"><svg class="av" viewBox="0 0 100 100"><use href="#av-aria"/></svg></div>
         <h3>Aria</h3>
@@ -937,6 +1240,7 @@
     </article>
 
     <article class="card tilt" id="p-zephyr" style="--accent:var(--zephyr); --accent-l:var(--zephyr-l)"><div class="glass spin"></div><div class="glare"></div><div class="spot"></div><div class="halo" style="--accent:var(--zephyr)"></div>
+      <div class="voice-aura" aria-hidden="true"><div class="aura-glow"></div><div class="aura-ring ring-1"></div><div class="aura-ring ring-2"></div><div class="aura-ring ring-3"></div></div>
       <div class="body">
         <div class="avatar"><svg class="av" viewBox="0 0 100 100"><use href="#av-zephyr"/></svg></div>
         <h3>Zephyr</h3>
@@ -954,6 +1258,7 @@
     </article>
 
     <article class="card tilt" id="p-mentor" style="--accent:var(--mentor); --accent-l:var(--mentor-l)"><div class="glass spin"></div><div class="glare"></div><div class="spot"></div><div class="halo" style="--accent:var(--mentor)"></div>
+      <div class="voice-aura" aria-hidden="true"><div class="aura-glow"></div><div class="aura-ring ring-1"></div><div class="aura-ring ring-2"></div><div class="aura-ring ring-3"></div></div>
       <div class="body">
         <div class="avatar"><svg class="av" viewBox="0 0 100 100"><use href="#av-mentor"/></svg></div>
         <h3>Mentor</h3>
@@ -973,16 +1278,18 @@
 
   <div class="sheet reveal"><div class="glass"></div>
     <div class="body">
-      <table>
-        <thead><tr><th>Persona</th><th>Register</th><th>Focus</th><th>Neural voice</th><th>SAPI fallback</th><th>Accent</th></tr></thead>
-        <tbody>
-          <tr><td class="name"><svg class="av" viewBox="0 0 100 100"><use href="#av-eli"/></svg>Eli Classic</td><td>Feminine</td><td>Personal companion &amp; general assistant</td><td><code>en-US-JennyNeural</code></td><td><code>Zira Desktop</code></td><td><span class="sw" style="background:var(--eli)"></span>#F0567A</td></tr>
-          <tr><td class="name"><svg class="av" viewBox="0 0 100 100"><use href="#av-atlas"/></svg>Atlas</td><td>Masculine</td><td>Agency tech lead &amp; architecture</td><td><code>en-US-GuyNeural</code></td><td><code>David</code></td><td><span class="sw" style="background:var(--atlas)"></span>#3A86FF</td></tr>
-          <tr><td class="name"><svg class="av" viewBox="0 0 100 100"><use href="#av-aria"/></svg>Aria</td><td>Feminine</td><td>Hotel &amp; hospitality concierge</td><td><code>en-US-AriaNeural</code></td><td><code>Zira Desktop</code></td><td><span class="sw" style="background:var(--aria)"></span>#E0A96D</td></tr>
-          <tr><td class="name"><svg class="av" viewBox="0 0 100 100"><use href="#av-zephyr"/></svg>Zephyr</td><td>Feminine</td><td>Event producer &amp; timelines</td><td><code>en-US-SaraNeural</code></td><td><code>Zira Desktop</code></td><td><span class="sw" style="background:var(--zephyr)"></span>#8338EC</td></tr>
-          <tr><td class="name"><svg class="av" viewBox="0 0 100 100"><use href="#av-mentor"/></svg>Mentor</td><td>Instructional</td><td>“Teach me” &amp; procedural guide</td><td><code>en-US-ChristopherNeural</code></td><td><code>David</code></td><td><span class="sw" style="background:var(--mentor)"></span>#2EC4B6</td></tr>
-        </tbody>
-      </table>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Persona</th><th>Register</th><th>Focus</th><th>Neural voice</th><th>SAPI fallback</th><th>Accent</th></tr></thead>
+          <tbody>
+            <tr><td class="name"><svg class="av" viewBox="0 0 100 100"><use href="#av-eli"/></svg>Eli Classic</td><td>Feminine</td><td>Personal companion &amp; general assistant</td><td><code>en-US-JennyNeural</code></td><td><code>Zira Desktop</code></td><td><span class="sw" style="background:var(--eli)"></span>#F0567A</td></tr>
+            <tr><td class="name"><svg class="av" viewBox="0 0 100 100"><use href="#av-atlas"/></svg>Atlas</td><td>Masculine</td><td>Agency tech lead &amp; architecture</td><td><code>en-US-GuyNeural</code></td><td><code>David</code></td><td><span class="sw" style="background:var(--atlas)"></span>#3A86FF</td></tr>
+            <tr><td class="name"><svg class="av" viewBox="0 0 100 100"><use href="#av-aria"/></svg>Aria</td><td>Feminine</td><td>Hotel &amp; hospitality concierge</td><td><code>en-US-AriaNeural</code></td><td><code>Zira Desktop</code></td><td><span class="sw" style="background:var(--aria)"></span>#E0A96D</td></tr>
+            <tr><td class="name"><svg class="av" viewBox="0 0 100 100"><use href="#av-zephyr"/></svg>Zephyr</td><td>Feminine</td><td>Event producer &amp; timelines</td><td><code>en-US-SaraNeural</code></td><td><code>Zira Desktop</code></td><td><span class="sw" style="background:var(--zephyr)"></span>#8338EC</td></tr>
+            <tr><td class="name"><svg class="av" viewBox="0 0 100 100"><use href="#av-mentor"/></svg>Mentor</td><td>Instructional</td><td>“Teach me” &amp; procedural guide</td><td><code>en-US-ChristopherNeural</code></td><td><code>David</code></td><td><span class="sw" style="background:var(--mentor)"></span>#2EC4B6</td></tr>
+          </tbody>
+        </table>
+      </div>
     </div>
   </div>
 </section>
@@ -1033,32 +1340,34 @@
   </div>
   <div class="diagram reveal"><div class="glass"></div>
     <div class="body">
-      <svg viewBox="0 0 900 340" role="img" aria-label="Architecture: overlay and phone feed the core brain, which routes to six agents over a desktop control layer">
-        <rect class="dbox" x="20" y="30" width="150" height="54" rx="12"/><text class="dt1" x="95" y="53" text-anchor="middle">Heart overlay</text><text class="dt2" x="95" y="71" text-anchor="middle">Electron · ws</text>
-        <rect class="dbox" x="20" y="110" width="150" height="54" rx="12"/><text class="dt1" x="95" y="133" text-anchor="middle">Phone PWA</text><text class="dt2" x="95" y="151" text-anchor="middle">camera · SOS · ws</text>
-        <rect class="dcore" x="260" y="52" width="220" height="90" rx="16"/><text class="dt0" x="370" y="90" text-anchor="middle">Eli core brain</text><text class="dt2" x="370" y="112" text-anchor="middle">intents → LLM tool loop → offline rules</text>
-        <rect class="dbox" x="260" y="176" width="220" height="50" rx="12"/><text class="dt1" x="370" y="197" text-anchor="middle">LLM layer</text><text class="dt2" x="370" y="214" text-anchor="middle">Gemini · Claude · Ollama · LM Studio</text>
-        <g>
-          <rect class="dagent" x="560" y="20" width="150" height="40" rx="10"/><text class="dt1" x="635" y="45" text-anchor="middle">Vision</text>
-          <rect class="dagent" x="560" y="70" width="150" height="40" rx="10"/><text class="dt1" x="635" y="95" text-anchor="middle">Memory</text>
-          <rect class="dagent" x="560" y="120" width="150" height="40" rx="10"/><text class="dt1" x="635" y="145" text-anchor="middle">Automation</text>
-          <rect class="dagent" x="740" y="20" width="150" height="40" rx="10"/><text class="dt1" x="815" y="45" text-anchor="middle">Coding</text>
-          <rect class="dagent" x="740" y="70" width="150" height="40" rx="10"/><text class="dt1" x="815" y="95" text-anchor="middle">Design</text>
-          <rect class="dagent" x="740" y="120" width="150" height="40" rx="10"/><text class="dt1" x="815" y="145" text-anchor="middle">Communication</text>
-        </g>
-        <rect class="dbox" x="560" y="250" width="330" height="54" rx="12"/><text class="dt1" x="725" y="273" text-anchor="middle">Desktop control layer</text><text class="dt2" x="725" y="291" text-anchor="middle">Win32 · pyautogui · Outlook COM · shell</text>
-        <path class="flow" d="M170,57 C215,57 215,80 260,85"/>
-        <path class="flow" d="M170,137 C215,137 215,112 260,108"/>
-        <path class="flow" d="M370,142 L370,176"/>
-        <path class="flow" d="M480,80 C520,70 525,45 560,40"/>
-        <path class="flow" d="M480,92 C520,90 525,90 560,90"/>
-        <path class="flow" d="M480,104 C520,115 525,138 560,140"/>
-        <path class="flow" d="M480,80 C620,10 700,15 740,38"/>
-        <path class="flow" d="M480,96 C620,60 700,72 740,88"/>
-        <path class="flow" d="M480,110 C620,130 700,138 740,140"/>
-        <path class="flow" d="M635,160 C635,210 670,240 690,250"/>
-        <path class="flow" d="M815,160 C815,205 790,235 770,250"/>
-      </svg>
+      <div class="diagram-wrap">
+        <svg viewBox="0 0 900 340" role="img" aria-label="Architecture: overlay and phone feed the core brain, which routes to six agents over a desktop control layer">
+          <rect class="dbox" x="20" y="30" width="150" height="54" rx="12"/><text class="dt1" x="95" y="53" text-anchor="middle">Heart overlay</text><text class="dt2" x="95" y="71" text-anchor="middle">Electron · ws</text>
+          <rect class="dbox" x="20" y="110" width="150" height="54" rx="12"/><text class="dt1" x="95" y="133" text-anchor="middle">Phone PWA</text><text class="dt2" x="95" y="151" text-anchor="middle">camera · SOS · ws</text>
+          <rect class="dcore" x="260" y="52" width="220" height="90" rx="16"/><text class="dt0" x="370" y="90" text-anchor="middle">Eli core brain</text><text class="dt2" x="370" y="112" text-anchor="middle">intents → LLM tool loop → offline rules</text>
+          <rect class="dbox" x="260" y="176" width="220" height="50" rx="12"/><text class="dt1" x="370" y="197" text-anchor="middle">LLM layer</text><text class="dt2" x="370" y="214" text-anchor="middle">Gemini · Claude · Ollama · LM Studio</text>
+          <g>
+            <rect class="dagent" x="560" y="20" width="150" height="40" rx="10"/><text class="dt1" x="635" y="45" text-anchor="middle">Vision</text>
+            <rect class="dagent" x="560" y="70" width="150" height="40" rx="10"/><text class="dt1" x="635" y="95" text-anchor="middle">Memory</text>
+            <rect class="dagent" x="560" y="120" width="150" height="40" rx="10"/><text class="dt1" x="635" y="145" text-anchor="middle">Automation</text>
+            <rect class="dagent" x="740" y="20" width="150" height="40" rx="10"/><text class="dt1" x="815" y="45" text-anchor="middle">Coding</text>
+            <rect class="dagent" x="740" y="70" width="150" height="40" rx="10"/><text class="dt1" x="815" y="95" text-anchor="middle">Design</text>
+            <rect class="dagent" x="740" y="120" width="150" height="40" rx="10"/><text class="dt1" x="815" y="145" text-anchor="middle">Communication</text>
+          </g>
+          <rect class="dbox" x="560" y="250" width="330" height="54" rx="12"/><text class="dt1" x="725" y="273" text-anchor="middle">Desktop control layer</text><text class="dt2" x="725" y="291" text-anchor="middle">Win32 · pyautogui · Outlook COM · shell</text>
+          <path class="flow" d="M170,57 C215,57 215,80 260,85"/>
+          <path class="flow" d="M170,137 C215,137 215,112 260,108"/>
+          <path class="flow" d="M370,142 L370,176"/>
+          <path class="flow" d="M480,80 C520,70 525,45 560,40"/>
+          <path class="flow" d="M480,92 C520,90 525,90 560,90"/>
+          <path class="flow" d="M480,104 C520,115 525,138 560,140"/>
+          <path class="flow" d="M480,80 C620,10 700,15 740,38"/>
+          <path class="flow" d="M480,96 C620,60 700,72 740,88"/>
+          <path class="flow" d="M480,110 C620,130 700,138 740,140"/>
+          <path class="flow" d="M635,160 C635,210 670,240 690,250"/>
+          <path class="flow" d="M815,160 C815,205 790,235 770,250"/>
+        </svg>
+      </div>
     </div>
   </div>
   <dl class="metrics">
@@ -1196,6 +1505,9 @@
     p3dItems.forEach(function(m){ m.classList.toggle('sel', +m.dataset.i===i); });
     root.style.setProperty('--active',p.color);
     root.style.setProperty('--active-l',p.light);
+    if(chips[i]) {
+      try { chips[i].scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' }); } catch(e){}
+    }
 
     if(snapTo3d && !reduced){
       // Snap 3D carousel smoothly so persona i rotates directly to center front
@@ -1218,12 +1530,36 @@
   // 3D Card clicks
   p3dItems.forEach(function(item){
     item.addEventListener('click',function(ev){
+      if(ev.target.closest('button')) return;
       select(+item.dataset.i, true);
     });
   });
 
-  // 3D Drag & Parallax Physics
+  // Dual-Axis Mobile Touch & Pointer Physics
+  var touchStartX=0, touchStartY=0, isHorizontalSwipe=null;
   if(stageScene && !reduced){
+    stageScene.addEventListener('touchstart', function(ev){
+      if(ev.target.closest('button')) return;
+      if(ev.touches.length === 1){
+        touchStartX = ev.touches[0].clientX;
+        touchStartY = ev.touches[0].clientY;
+        isHorizontalSwipe = null;
+      }
+    }, {passive:true});
+
+    stageScene.addEventListener('touchmove', function(ev){
+      if(ev.touches.length === 1 && isHorizontalSwipe === null){
+        var dx = Math.abs(ev.touches[0].clientX - touchStartX);
+        var dy = Math.abs(ev.touches[0].clientY - touchStartY);
+        if(dx > 7 || dy > 7){
+          isHorizontalSwipe = (dx >= dy);
+        }
+      }
+      if(isHorizontalSwipe && ev.cancelable){
+        ev.preventDefault();
+      }
+    }, {passive:false});
+
     stageScene.addEventListener('pointerdown',function(ev){
       if(ev.target.closest('button')) return;
       isDragging=true;
@@ -1289,6 +1625,19 @@
     });
   }
 
+  // Mobile Gyroscope Parallax (DeviceOrientation)
+  if(window.DeviceOrientationEvent){
+    window.addEventListener('deviceorientation', function(ev){
+      if(ev.beta === null || ev.gamma === null) return;
+      var roll = Math.max(-28, Math.min(28, ev.gamma));
+      var pitch = Math.max(15, Math.min(75, ev.beta)) - 45;
+      stage.style.setProperty('--stage-ry', (roll * 0.42).toFixed(2) + 'deg');
+      stage.style.setProperty('--stage-rx', (-8 - pitch * 0.35).toFixed(2) + 'deg');
+      stage.style.setProperty('--mx', (50 + roll * 1.3).toFixed(1) + '%');
+      stage.style.setProperty('--my', (50 + pitch * 1.3).toFixed(1) + '%');
+    }, {passive:true});
+  }
+
   // 3D Continuous Orbit Animation Loop
   function tick(){
     if(!reduced){
@@ -1320,7 +1669,7 @@
     stage.classList.add('entrance-active');
     currentRotY=0; targetRotY=0;
 
-    // Toast sequential arrival
+    // Sequential arrival
     P.forEach(function(p, i){
       setTimeout(function(){
         if(sel === i) applyDetail(p);
@@ -1401,7 +1750,107 @@
     });
   }
 
-  // Voice Preview Engine with Audio Equalizer Waves
+  // ================= WEB AUDIO API CRYSTAL CHIME ENGINE =================
+  var audioCtx = null;
+  function getAudioContext(){
+    if(!audioCtx){
+      var AC = window.AudioContext || window.webkitAudioContext;
+      if(AC) audioCtx = new AC();
+    }
+    if(audioCtx && audioCtx.state === 'suspended'){
+      audioCtx.resume();
+    }
+    return audioCtx;
+  }
+
+  function playPersonaChime(personaKey){
+    try {
+      var ctx = getAudioContext();
+      if(!ctx) return;
+      var t = ctx.currentTime;
+      var chords = {
+        eli:    [698.46, 880.00, 1046.50, 1396.91], // F5, A5, C6, F6 (Warm celestial shimmer)
+        atlas:  [293.66, 440.00, 587.33, 739.99],  // D4, A4, D5, F#5 (Crisp tech pulse)
+        aria:   [329.63, 493.88, 659.25, 987.77],  // E4, B4, E5, B5 (Warm velvet luxury)
+        zephyr: [392.00, 587.33, 783.99, 1174.66], // G4, D5, G5, D6 (Dynamic energetic spark)
+        mentor: [261.63, 392.00, 523.25, 659.25]   // C4, G4, C5, E5 (Deep calm zen bell)
+      };
+      var freqs = chords[personaKey] || chords.eli;
+      var masterGain = ctx.createGain();
+      masterGain.gain.setValueAtTime(0.24, t);
+      masterGain.gain.exponentialRampToValueAtTime(0.0001, t + 1.25);
+      masterGain.connect(ctx.destination);
+
+      freqs.forEach(function(freq, idx){
+        var osc = ctx.createOscillator();
+        var noteGain = ctx.createGain();
+        osc.type = idx % 2 === 0 ? 'sine' : 'triangle';
+        osc.frequency.setValueAtTime(freq, t);
+
+        var noteStart = t + (idx * 0.038);
+        noteGain.gain.setValueAtTime(0, noteStart);
+        noteGain.gain.linearRampToValueAtTime(0.32 / freqs.length, noteStart + 0.02);
+        noteGain.gain.exponentialRampToValueAtTime(0.0001, noteStart + 0.95);
+
+        osc.connect(noteGain);
+        noteGain.connect(masterGain);
+        osc.start(noteStart);
+        osc.stop(noteStart + 1.1);
+      });
+    } catch(e){}
+  }
+
+  // Syllable Cadence Mouth Animation
+  var speechAnimTimer = null;
+  function startSpeechAnimation(){
+    stopSpeechAnimation();
+    var start = performance.now();
+    function loop(now){
+      var elapsed = (now - start) / 1000;
+      var val = 1 + 0.95 * Math.max(0, Math.sin(elapsed * 16) * Math.cos(elapsed * 7.5));
+      root.style.setProperty('--mouth-sy', val.toFixed(2));
+      speechAnimTimer = requestAnimationFrame(loop);
+    }
+    speechAnimTimer = requestAnimationFrame(loop);
+  }
+  function stopSpeechAnimation(){
+    if(speechAnimTimer){
+      cancelAnimationFrame(speechAnimTimer);
+      speechAnimTimer = null;
+    }
+    root.style.setProperty('--mouth-sy', '1');
+  }
+
+  // Voice HUD Elements
+  var voiceHud = $('voiceHud');
+  var hudStatus = $('hudStatus');
+  var hudName = $('hudName');
+  var hudStopBtn = $('hudStopBtn');
+
+  function stopCurrentSpeech(){
+    if('speechSynthesis' in window) speechSynthesis.cancel();
+    stopSpeechAnimation();
+    if(voiceHud) voiceHud.classList.remove('active');
+    stage.classList.remove('speaking');
+    p3dItems.forEach(function(el){ el.classList.remove('speaking'); });
+    chips.forEach(function(el){ el.classList.remove('speaking'); });
+    [].forEach.call(document.querySelectorAll('.card'), function(c){ c.classList.remove('speaking'); });
+    [].forEach.call(document.querySelectorAll('[data-voice]'), function(x){
+      x.classList.remove('speaking');
+      var sw = x.querySelector('.soundwave');
+      if(sw) sw.remove();
+    });
+  }
+
+  if(hudStopBtn){
+    hudStopBtn.addEventListener('click', function(ev){
+      ev.stopPropagation();
+      stopCurrentSpeech();
+      toast('Speech stopped');
+    });
+  }
+
+  // Voice Preview Engine with Audio Equalizer Waves & Illumination
   var voices=[];
   function loadVoices(){ voices=speechSynthesis?speechSynthesis.getVoices():[]; }
   if('speechSynthesis' in window){ loadVoices(); speechSynthesis.onvoiceschanged=loadVoices; }
@@ -1417,38 +1866,66 @@
 
   document.addEventListener('click',function(ev){
     var b=ev.target.closest('[data-voice]'); if(!b) return;
-    if(!('speechSynthesis' in window)){ toast('Speech preview isn\'t supported in this browser'); return; }
-    var p=P.find(function(x){return x.key===b.dataset.voice;})||P[sel];
+    ev.stopPropagation();
+    var pKey = b.dataset.voice;
+    var p = P.find(function(x){ return x.key===pKey; }) || P[sel];
     var pIdx = P.indexOf(p);
+
     if(pIdx > -1) select(pIdx, true);
 
-    speechSynthesis.cancel();
-    [].forEach.call(document.querySelectorAll('[data-voice]'),function(x){
-      x.classList.remove('speaking');
-      var sw = x.querySelector('.soundwave');
-      if(sw) sw.remove();
-    });
+    // Stop existing speech
+    stopCurrentSpeech();
 
-    var u=new SpeechSynthesisUtterance(p.line);
-    var v=pickVoice(p); if(v) u.voice=v;
-    u.pitch=p.pitch; u.rate=p.rate;
+    // 1. Play synthesized polyphonic crystal harmonic chime
+    playPersonaChime(p.key);
+
+    // 2. Activate Illumination & HUD
+    stage.classList.add('speaking');
+    var activePod = p3dItems[pIdx];
+    if(activePod) activePod.classList.add('speaking');
+    var activeCard = document.getElementById(p.anchor.replace('#',''));
+    if(activeCard) activeCard.classList.add('speaking');
+    if(chips[pIdx]) chips[pIdx].classList.add('speaking');
+
+    if(voiceHud){
+      if(hudStatus) hudStatus.textContent = 'ILLUMINATION VOICE ACTIVE';
+      if(hudName) hudName.textContent = p.name + ' · ' + p.neural;
+      voiceHud.classList.add('active');
+    }
+
     b.classList.add('speaking');
-
-    // Add animated crystal soundwave
     var swEl = document.createElement('span');
     swEl.className = 'soundwave';
     swEl.innerHTML = '<span></span><span></span><span></span><span></span>';
     b.appendChild(swEl);
 
-    u.onend=u.onerror=function(){
-      b.classList.remove('speaking');
-      if(swEl.parentNode) swEl.parentNode.removeChild(swEl);
-    };
-    speechSynthesis.speak(u);
-    toast('Previewing '+p.name+' ('+p.reg+')');
+    // 3. Start organic mouth speaking animation
+    startSpeechAnimation();
+
+    // 4. Synthesize voice speech
+    if('speechSynthesis' in window){
+      var u = new SpeechSynthesisUtterance(p.line);
+      var v = pickVoice(p); if(v) u.voice = v;
+      u.pitch = p.pitch; u.rate = p.rate;
+
+      u.onend = function(){
+        stopCurrentSpeech();
+      };
+      u.onerror = function(){
+        stopCurrentSpeech();
+      };
+
+      speechSynthesis.speak(u);
+      toast('Speaking: ' + p.name + ' (' + p.reg + ')');
+    } else {
+      toast('Audio chime played · Speech synthesis unsupported');
+      setTimeout(function(){ stopCurrentSpeech(); }, 2800);
+    }
   });
 
   applyDetail(P[0]);
 })();
 </script>
+</body>
+</html>
 
